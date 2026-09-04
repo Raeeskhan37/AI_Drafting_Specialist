@@ -1,12 +1,3 @@
-"""
-DraftForge — AI Document Composer
------------------------------------
-A Streamlit app that generates professional emails, letters, reports,
-and other documents using Groq or Gemini.
-
-API keys are loaded securely from Streamlit Secrets.
-"""
-
 import io
 import os
 import sqlite3
@@ -18,27 +9,20 @@ import streamlit as st
 from docx import Document
 from docx.shared import Inches
 from fpdf import FPDF
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 
-# ==========================================================================
-# CONFIG
-# ==========================================================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-st.set_page_config(
-    page_title="DraftForge — AI Document Composer",
-    page_icon="📝",
-    layout="wide",
-)
-
-# Current Groq production model
 GROQ_MODEL = "openai/gpt-oss-120b"
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-2.0-flash:generateContent"
+    "https://generativelanguage.googleapis.com/"
+    "v1beta/models/gemini-2.0-flash:generateContent"
 )
 
 DOC_TYPES = [
@@ -58,43 +42,23 @@ TONES = [
     "Neutral",
 ]
 
-DB_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "drafts.db",
+DB_PATH = os.path.join(os.path.dirname(__file__), "drafts.db")
+
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+
+st.set_page_config(
+    page_title="DraftForge — AI Document Composer",
+    page_icon="✍️",
+    layout="wide",
 )
 
 
-# ==========================================================================
-# SECURE API KEY HELPERS
-# ==========================================================================
-
-def get_secret(name):
-    """
-    Get a secret from Streamlit Secrets.
-
-    Returns an empty string if the secret does not exist.
-    """
-
-    try:
-        return st.secrets.get(name, "")
-    except Exception:
-        return ""
-
-
-def get_api_key(provider):
-    """
-    Get the API key for the selected provider.
-    """
-
-    if provider == "Groq (Llama 3.3)":
-        return get_secret("GROQ_API_KEY")
-
-    return get_secret("GEMINI_API_KEY")
-
-
-# ==========================================================================
+# ============================================================
 # DATABASE
-# ==========================================================================
+# ============================================================
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -103,35 +67,57 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS drafts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user TEXT,
-            created_at TEXT,
-            doc_type TEXT,
+            document_type TEXT,
+            tone TEXT,
+            recipient TEXT,
+            sender TEXT,
             subject TEXT,
-            content TEXT
+            key_points TEXT,
+            draft TEXT,
+            created_at TEXT
         )
         """
     )
 
     conn.commit()
+    conn.close()
 
-    return conn
 
-
-def save_draft(user, doc_type, subject, content):
-    conn = init_db()
+def save_draft(
+    document_type,
+    tone,
+    recipient,
+    sender,
+    subject,
+    key_points,
+    draft,
+):
+    conn = sqlite3.connect(DB_PATH)
 
     conn.execute(
         """
         INSERT INTO drafts
-        (user, created_at, doc_type, subject, content)
-        VALUES (?, ?, ?, ?, ?)
+        (
+            document_type,
+            tone,
+            recipient,
+            sender,
+            subject,
+            key_points,
+            draft,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            user,
-            datetime.now().strftime("%Y-%m-%d %H:%M"),
-            doc_type,
+            document_type,
+            tone,
+            recipient,
+            sender,
             subject,
-            content,
+            key_points,
+            draft,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         ),
     )
 
@@ -139,18 +125,24 @@ def save_draft(user, doc_type, subject, content):
     conn.close()
 
 
-def get_history(user, limit=20):
-    conn = init_db()
+def get_history():
+    conn = sqlite3.connect(DB_PATH)
 
     rows = conn.execute(
         """
-        SELECT id, created_at, doc_type, subject, content
+        SELECT
+            id,
+            document_type,
+            tone,
+            recipient,
+            sender,
+            subject,
+            key_points,
+            draft,
+            created_at
         FROM drafts
-        WHERE user = ?
         ORDER BY id DESC
-        LIMIT ?
-        """,
-        (user, limit),
+        """
     ).fetchall()
 
     conn.close()
@@ -159,7 +151,7 @@ def get_history(user, limit=20):
 
 
 def delete_draft(draft_id):
-    conn = init_db()
+    conn = sqlite3.connect(DB_PATH)
 
     conn.execute(
         "DELETE FROM drafts WHERE id = ?",
@@ -170,62 +162,83 @@ def delete_draft(draft_id):
     conn.close()
 
 
-# ==========================================================================
-# PROMPT
-# ==========================================================================
+init_db()
+
+
+# ============================================================
+# SECRETS / API KEYS
+# ============================================================
+
+def get_secret(name):
+    try:
+        return st.secrets.get(name, "")
+    except Exception:
+        return ""
+
+
+def get_api_key(provider):
+
+    if provider == "Groq (Llama 3.3)":
+        return get_secret("GROQ_API_KEY")
+
+    return get_secret("GEMINI_API_KEY")
+
+
+# ============================================================
+# PROMPT BUILDER
+# ============================================================
 
 def build_prompt(
-    doc_type,
+    document_type,
     tone,
     recipient,
     sender,
     subject,
     key_points,
-    extra,
 ):
 
-    parts = [
-        f"Write a professional {doc_type.lower()} "
-        f"in a {tone.lower()} tone."
-    ]
+    prompt = f"""
+You are an expert professional writer and editor.
 
-    if recipient:
-        parts.append(
-            f"Recipient / audience: {recipient}."
-        )
+Create a polished, professional {document_type}.
 
-    if sender:
-        parts.append(
-            f"Sender: {sender}."
-        )
+Writing tone:
+{tone}
 
-    if subject:
-        parts.append(
-            f"Subject / purpose: {subject}."
-        )
+Recipient:
+{recipient}
 
-    if key_points:
-        parts.append(
-            f"Key points to include:\n{key_points}"
-        )
+Sender:
+{sender}
 
-    if extra:
-        parts.append(
-            f"Additional instructions: {extra}"
-        )
+Subject:
+{subject}
 
-    parts.append(
-        "Return only the finished document text "
-        "(with a greeting/sign-off if appropriate). "
-        "Do not add explanations, notes, or markdown formatting."
-    )
+Key points provided by the user:
+{key_points}
 
-    return "\n".join(parts)
+Requirements:
+
+1. Write clear and professional English.
+2. Maintain the requested tone.
+3. Do not invent important facts.
+4. Organize the document logically.
+5. Correct grammar and spelling.
+6. Make the document ready to use.
+7. Do not add explanations before or after the document.
+8. Do not use markdown code blocks.
+9. For formal letters and emails, include an appropriate greeting and closing.
+10. Keep placeholders such as [Date], [Company Name], etc. when useful.
+
+Return only the finished document.
+"""
+
+    return prompt.strip()
 
 
-# ==========================================================================
-# GROQ
-# ==========================================================================
+# ============================================================
+# GROQ API
+# ============================================================
 
 def call_groq(api_key, prompt):
 
@@ -235,11 +248,10 @@ def call_groq(api_key, prompt):
         )
 
     try:
+
         from groq import Groq
 
-        client = Groq(
-            api_key=api_key
-        )
+        client = Groq(api_key=api_key)
 
         response = client.chat.completions.create(
             model=GROQ_MODEL,
@@ -247,8 +259,7 @@ def call_groq(api_key, prompt):
                 {
                     "role": "system",
                     "content": (
-                        "You are an expert professional writer "
-                        "and editor."
+                        "You are an expert professional writer and editor."
                     ),
                 },
                 {
@@ -263,16 +274,14 @@ def call_groq(api_key, prompt):
 
     except Exception as e:
 
-        error_message = str(e)
-
         raise RuntimeError(
-            f"Groq API error: {error_message}"
+            f"Groq API error: {str(e)}"
         ) from e
 
 
-# ==========================================================================
-# GEMINI
-# ==========================================================================
+# ============================================================
+# GEMINI API
+# ============================================================
 
 def call_gemini(api_key, prompt):
 
@@ -281,113 +290,407 @@ def call_gemini(api_key, prompt):
             "GEMINI_API_KEY is not configured in Streamlit Secrets."
         )
 
-    headers = {
-        "Content-Type": "application/json"
-    }
+    try:
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
-            }
-        ]
-    }
+        url = f"{GEMINI_URL}?key={api_key}"
 
-    response = requests.post(
-        f"{GEMINI_URL}?key={api_key}",
-        headers=headers,
-        json=payload,
-        timeout=60,
-    )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
 
-    if not response.ok:
-
-        raise RuntimeError(
-            f"Gemini API error {response.status_code}: "
-            f"{response.text}"
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=60,
         )
 
-    data = response.json()
+        response.raise_for_status()
 
-    try:
+        data = response.json()
+
         return (
-            data["candidates"][0]
-            ["content"]
-            ["parts"][0]
-            ["text"]
+            data["candidates"][0]["content"]["parts"][0]["text"]
             .strip()
         )
 
-    except (KeyError, IndexError):
+    except Exception as e:
 
         raise RuntimeError(
-            f"Unexpected Gemini response: {data}"
-        )
+            f"Gemini API error: {str(e)}"
+        ) from e
 
 
-# ==========================================================================
-# GENERATE DOCUMENT
-# ==========================================================================
+# ============================================================
+# DOCUMENT EXPORT
+# ============================================================
 
-def generate_document(
-    provider,
-    api_key,
-    prompt,
+def export_docx(
+    text,
+    sender="",
+    recipient="",
+    subject="",
+    logo=None,
 ):
 
-    if provider == "Groq (Llama 3.3)":
+    document = Document()
 
-        return call_groq(
-            api_key,
-            prompt,
+    # Logo
+    if logo is not None:
+        try:
+            document.add_picture(
+                logo,
+                width=Inches(1.5),
+            )
+        except Exception:
+            pass
+
+    # Letterhead
+    if sender:
+        p = document.add_paragraph()
+        run = p.add_run(sender)
+        run.bold = True
+
+    if recipient:
+        document.add_paragraph(recipient)
+
+    if subject:
+        p = document.add_paragraph()
+        run = p.add_run(f"Subject: {subject}")
+        run.bold = True
+
+    document.add_paragraph("")
+
+    # Main text
+    for line in text.splitlines():
+
+        document.add_paragraph(line)
+
+    buffer = io.BytesIO()
+
+    document.save(buffer)
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+
+# ============================================================
+# SAFE TEXT FOR PDF
+# ============================================================
+
+def clean_pdf_text(text):
+
+    replacements = {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00a0": " ",
+        "\u2022": "-",
+        "\u2011": "-",
+        "\u2010": "-",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    # Helvetica in fpdf2 is Latin-1 based.
+    text = text.encode(
+        "latin-1",
+        "replace",
+    ).decode("latin-1")
+
+    return text
+
+
+# ============================================================
+# SAFE PDF LINE WRAPPING
+# ============================================================
+
+def wrap_pdf_line(pdf, text, max_width):
+
+    text = clean_pdf_text(text)
+
+    if not text:
+        return [""]
+
+    words = text.split(" ")
+
+    lines = []
+
+    current = ""
+
+    for word in words:
+
+        # Handle extremely long words.
+        if pdf.get_string_width(word) > max_width:
+
+            if current:
+                lines.append(current)
+                current = ""
+
+            remaining = word
+
+            while remaining:
+
+                best = ""
+
+                for i in range(1, len(remaining) + 1):
+
+                    candidate = remaining[:i]
+
+                    if pdf.get_string_width(candidate) <= max_width:
+                        best = candidate
+                    else:
+                        break
+
+                if not best:
+                    best = remaining[0]
+
+                lines.append(best)
+
+                remaining = remaining[len(best):]
+
+            continue
+
+        candidate = (
+            word
+            if not current
+            else current + " " + word
         )
 
-    return call_gemini(
-        api_key,
-        prompt,
+        if pdf.get_string_width(candidate) <= max_width:
+
+            current = candidate
+
+        else:
+
+            if current:
+                lines.append(current)
+
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines
+
+
+# ============================================================
+# PDF EXPORT
+# ============================================================
+
+def export_pdf(
+    text,
+    sender="",
+    recipient="",
+    subject="",
+    logo=None,
+):
+
+    pdf = FPDF()
+
+    # Page settings
+    pdf.set_auto_page_break(
+        auto=True,
+        margin=15,
     )
 
+    pdf.add_page()
 
-# ==========================================================================
-# FONT HELPERS
-# ==========================================================================
+    # --------------------------------------------------------
+    # LOGO
+    # --------------------------------------------------------
 
-def get_font(size, bold=False):
-
-    if bold:
-
-        candidates = [
-            "DejaVuSans-Bold.ttf"
-        ]
-
-    else:
-
-        candidates = [
-            "DejaVuSans.ttf"
-        ]
-
-    for name in candidates:
+    if logo is not None:
 
         try:
 
-            return ImageFont.truetype(
-                name,
-                size,
-            )
+            if isinstance(logo, bytes):
+
+                logo_stream = io.BytesIO(logo)
+
+                pdf.image(
+                    logo_stream,
+                    x=10,
+                    y=10,
+                    w=35,
+                )
+
+            elif isinstance(logo, str) and os.path.exists(logo):
+
+                pdf.image(
+                    logo,
+                    x=10,
+                    y=10,
+                    w=35,
+                )
+
+            pdf.ln(30)
 
         except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # LETTERHEAD
+    # --------------------------------------------------------
+
+    pdf.set_font(
+        "Helvetica",
+        "B",
+        12,
+    )
+
+    if sender:
+
+        sender_clean = clean_pdf_text(sender)
+
+        pdf.cell(
+            0,
+            7,
+            sender_clean,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+    pdf.set_font(
+        "Helvetica",
+        "",
+        11,
+    )
+
+    if recipient:
+
+        recipient_clean = clean_pdf_text(recipient)
+
+        pdf.cell(
+            0,
+            7,
+            recipient_clean,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+    if subject:
+
+        pdf.ln(3)
+
+        pdf.set_font(
+            "Helvetica",
+            "B",
+            11,
+        )
+
+        subject_clean = clean_pdf_text(
+            f"Subject: {subject}"
+        )
+
+        pdf.cell(
+            0,
+            7,
+            subject_clean,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+    pdf.ln(5)
+
+    # --------------------------------------------------------
+    # BODY
+    # --------------------------------------------------------
+
+    pdf.set_font(
+        "Helvetica",
+        "",
+        11,
+    )
+
+    usable_width = (
+        pdf.w
+        - pdf.l_margin
+        - pdf.r_margin
+    )
+
+    # Safety margin so fpdf2 never receives an
+    # unusably small width.
+    usable_width = max(
+        20,
+        usable_width,
+    )
+
+    for raw_line in text.splitlines():
+
+        raw_line = raw_line.rstrip()
+
+        # Blank line
+        if not raw_line.strip():
+
+            pdf.ln(5)
+
             continue
 
-    return ImageFont.load_default()
+        wrapped_lines = wrap_pdf_line(
+            pdf,
+            raw_line,
+            usable_width,
+        )
+
+        for line in wrapped_lines:
+
+            if not line:
+                pdf.ln(5)
+                continue
+
+            # Extra safety check
+            line = clean_pdf_text(line)
+
+            if not line:
+                pdf.ln(5)
+                continue
+
+            # If somehow the line is still too wide,
+            # shrink it one character at a time.
+            while (
+                pdf.get_string_width(line)
+                > usable_width
+                and len(line) > 1
+            ):
+                line = line[:-1]
+
+            if not line:
+                continue
+
+            pdf.multi_cell(
+                usable_width,
+                7,
+                line,
+                new_x="LMARGIN",
+                new_y="NEXT",
+            )
+
+    # --------------------------------------------------------
+    # RETURN PDF BYTES
+    # --------------------------------------------------------
+
+    output = pdf.output()
+
+    return bytes(output)
 
 
-# ==========================================================================
-# EXPORT TXT
-# ==========================================================================
+# ============================================================
+# TEXT EXPORT
+# ============================================================
 
 def export_txt(text):
 
@@ -396,448 +699,97 @@ def export_txt(text):
     )
 
 
-# ==========================================================================
-# EXPORT DOCX
-# ==========================================================================
+# ============================================================
+# IMAGE EXPORT
+# ============================================================
 
-def export_docx(
-    text,
-    company,
-    address,
-    logo_bytes,
-):
+def export_image(text):
 
-    doc = Document()
+    try:
 
-    if logo_bytes:
+        from PIL import ImageDraw, ImageFont
 
-        try:
+        lines = text.splitlines()
 
-            doc.add_picture(
-                io.BytesIO(logo_bytes),
-                width=Inches(1.2),
-            )
+        font = ImageFont.load_default()
 
-        except Exception:
-            pass
+        line_height = 18
 
-    if company:
+        width = 1200
 
-        doc.add_heading(
-            company,
-            level=1,
-        )
-
-    if address:
-
-        doc.add_paragraph(
-            address
-        )
-
-    if company or address:
-
-        doc.add_paragraph(
-            "_" * 60
-        )
-
-    for para in text.split("\n"):
-
-        doc.add_paragraph(
-            para
-        )
-
-    buffer = io.BytesIO()
-
-    doc.save(buffer)
-
-    return buffer.getvalue()
-
-
-# ==========================================================================
-# EXPORT PDF
-# ==========================================================================
-
-def export_pdf(
-    text,
-    company,
-    address,
-    logo_bytes,
-):
-
-    pdf = FPDF()
-
-    pdf.add_page()
-
-    if logo_bytes:
-
-        try:
-
-            logo_path = "/tmp/_draftforge_logo.png"
-
-            with open(
-                logo_path,
-                "wb",
-            ) as f:
-
-                f.write(
-                    logo_bytes
-                )
-
-            pdf.image(
-                logo_path,
-                x=10,
-                y=8,
-                w=25,
-            )
-
-            pdf.set_xy(
-                40,
-                10,
-            )
-
-        except Exception:
-
-            pdf.set_xy(
-                10,
-                10,
-            )
-
-    else:
-
-        pdf.set_xy(
-            10,
-            10,
-        )
-
-    if company:
-
-        pdf.set_font(
-            "Helvetica",
-            "B",
-            16,
-        )
-
-        pdf.cell(
-            0,
-            8,
-            company,
-            ln=True,
-        )
-
-        pdf.set_x(
-            pdf.l_margin
-            if not logo_bytes
-            else 40
-        )
-
-    if address:
-
-        pdf.set_font(
-            "Helvetica",
-            size=10,
-        )
-
-        pdf.set_x(
-            pdf.l_margin
-            if not logo_bytes
-            else 40
-        )
-
-        pdf.cell(
-            0,
-            6,
-            address,
-            ln=True,
-        )
-
-    if company or address:
-
-        pdf.ln(4)
-
-        pdf.set_draw_color(
-            150,
-            150,
-            150,
-        )
-
-        pdf.line(
-            10,
-            pdf.get_y(),
+        height = max(
             200,
-            pdf.get_y(),
+            (len(lines) + 4) * line_height,
         )
 
-        pdf.ln(8)
+        image = Image.new(
+            "RGB",
+            (width, height),
+            "white",
+        )
 
-    else:
+        draw = ImageDraw.Draw(image)
 
-        pdf.set_y(20)
+        y = 20
 
-    pdf.set_font(
-        "Helvetica",
-        size=12,
-    )
+        for line in lines:
 
-    for line in text.split("\n"):
-
-        wrapped = (
-            textwrap.wrap(
+            draw.text(
+                (30, y),
                 line,
-                100,
-            )
-            or [""]
-        )
-
-        for wrapped_line in wrapped:
-
-            pdf.multi_cell(
-                0,
-                8,
-                wrapped_line,
+                fill="black",
+                font=font,
             )
 
-    return bytes(
-        pdf.output(
-            dest="S"
-        )
-    )
+            y += line_height
 
+        buffer = io.BytesIO()
 
-# ==========================================================================
-# EXPORT IMAGE
-# ==========================================================================
-
-def export_image(
-    text,
-    company,
-    address,
-    logo_bytes,
-    fmt="PNG",
-):
-
-    width = 1000
-
-    body_font = get_font(
-        20
-    )
-
-    header_font = get_font(
-        26,
-        bold=True,
-    )
-
-    sub_font = get_font(
-        16
-    )
-
-    wrapped_lines = []
-
-    for line in text.split("\n"):
-
-        wrapped_lines.extend(
-            textwrap.wrap(
-                line,
-                80,
-            )
-            or [""]
+        image.save(
+            buffer,
+            format="PNG",
         )
 
-    header_height = 0
+        buffer.seek(0)
 
-    if company:
-        header_height += 40
+        return buffer.getvalue()
 
-    if address:
-        header_height += 26
+    except Exception as e:
 
-    if company or address:
-        header_height += 20
-
-    line_height = 28
-
-    height = max(
-        400,
-        header_height
-        + line_height
-        * len(wrapped_lines)
-        + 100,
-    )
-
-    img = Image.new(
-        "RGB",
-        (
-            width,
-            height,
-        ),
-        "white",
-    )
-
-    draw = ImageDraw.Draw(
-        img
-    )
-
-    y = 30
-
-    x_text = 40
-
-    if logo_bytes:
-
-        try:
-
-            logo = Image.open(
-                io.BytesIO(
-                    logo_bytes
-                )
-            )
-
-            logo.thumbnail(
-                (
-                    80,
-                    80,
-                )
-            )
-
-            img.paste(
-                logo,
-                (
-                    40,
-                    y,
-                ),
-            )
-
-            x_text = 140
-
-        except Exception:
-            pass
-
-    if company:
-
-        draw.text(
-            (
-                x_text,
-                y,
-            ),
-            company,
-            fill="black",
-            font=header_font,
+        raise RuntimeError(
+            f"Image export error: {str(e)}"
         )
 
-        y += 40
 
-    if address:
-
-        draw.text(
-            (
-                x_text,
-                y,
-            ),
-            address,
-            fill="gray",
-            font=sub_font,
-        )
-
-        y += 30
-
-    if company or address:
-
-        y += 10
-
-        draw.line(
-            (
-                40,
-                y,
-                width - 40,
-                y,
-            ),
-            fill=(
-                180,
-                180,
-                180,
-            ),
-            width=2,
-        )
-
-        y += 25
-
-    else:
-
-        y = 40
-
-    for line in wrapped_lines:
-
-        draw.text(
-            (
-                40,
-                y,
-            ),
-            line,
-            fill="black",
-            font=body_font,
-        )
-
-        y += line_height
-
-    buffer = io.BytesIO()
-
-    save_fmt = (
-        "JPEG"
-        if fmt.upper() == "JPG"
-        else fmt.upper()
-    )
-
-    if save_fmt == "JPEG":
-
-        img = img.convert(
-            "RGB"
-        )
-
-    img.save(
-        buffer,
-        format=save_fmt,
-    )
-
-    return buffer.getvalue()
-
-
-# ==========================================================================
-# USER INTERFACE
-# ==========================================================================
-
-st.title(
-    "📝 DraftForge — AI Document Composer"
-)
-
-st.caption(
-    "Draft professional emails, letters, and reports — "
-    "then edit and export."
-)
-
-
-# ==========================================================================
+# ============================================================
 # SIDEBAR
-# ==========================================================================
+# ============================================================
 
 with st.sidebar:
 
-    st.header(
-        "AI Provider"
+    st.title("✍️ DraftForge")
+
+    st.caption(
+        "AI Document Composer"
     )
 
+    st.divider()
+
+    # --------------------------------------------------------
+    # AI PROVIDER
+    # --------------------------------------------------------
+
+    st.subheader("🤖 AI Provider")
+
     provider = st.selectbox(
-        "Provider",
+        "Choose AI provider",
         [
             "Groq (Llama 3.3)",
             "Gemini",
         ],
     )
 
-    # ------------------------------------------------------
-    # Securely load API key from Streamlit Secrets
-    # ------------------------------------------------------
-
-    api_key = get_api_key(
-        provider
-    )
+    api_key = get_api_key(provider)
 
     if api_key:
 
@@ -847,154 +799,144 @@ with st.sidebar:
 
     else:
 
-        st.warning(
-            "⚠️ API key is not configured."
-        )
+        if provider == "Groq (Llama 3.3)":
 
-    st.caption(
-        "API keys are loaded from Streamlit Secrets."
-    )
+            st.warning(
+                "GROQ_API_KEY not found in Streamlit Secrets."
+            )
+
+        else:
+
+            st.warning(
+                "GEMINI_API_KEY not found in Streamlit Secrets."
+            )
 
     st.divider()
 
-    # ------------------------------------------------------
-    # USER PROFILE
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # PROFILE
+    # --------------------------------------------------------
 
-    st.header(
-        "Your profile"
-    )
+    st.subheader("👤 Profile")
 
-    username = st.text_input(
+    profile_name = st.text_input(
         "Your name",
-        value=st.session_state.get(
-            "username",
-            "Guest",
-        ),
+        value="",
+        key="profile_name",
     )
 
-    st.session_state.username = (
-        username or "Guest"
-    )
-
-    st.caption(
-        "Used only to tag and filter "
-        "your saved draft history."
+    profile_organization = st.text_input(
+        "Organization",
+        value="",
+        key="profile_organization",
     )
 
     st.divider()
 
-    # ------------------------------------------------------
+    # --------------------------------------------------------
     # LETTERHEAD
-    # ------------------------------------------------------
+    # --------------------------------------------------------
 
-    with st.expander(
-        "🖋️ Letterhead "
-        "(for PDF / image / Word export)"
-    ):
+    st.subheader("🖼️ Letterhead")
 
-        company = st.text_input(
-            "Company / your name"
-        )
+    logo_file = st.file_uploader(
+        "Upload logo",
+        type=[
+            "png",
+            "jpg",
+            "jpeg",
+        ],
+    )
 
-        address = st.text_input(
-            "Address / contact line"
-        )
+    logo_bytes = None
 
-        logo_file = st.file_uploader(
-            "Logo (optional)",
-            type=[
-                "png",
-                "jpg",
-                "jpeg",
-            ],
-        )
+    if logo_file is not None:
 
-        logo_bytes = (
-            logo_file.read()
-            if logo_file
-            else None
+        logo_bytes = logo_file.getvalue()
+
+        st.image(
+            logo_bytes,
+            width=120,
         )
 
     st.divider()
 
-    # ------------------------------------------------------
+    # --------------------------------------------------------
     # HISTORY
-    # ------------------------------------------------------
+    # --------------------------------------------------------
 
-    st.subheader(
-        "📜 History"
-    )
+    st.subheader("📚 Draft History")
 
-    history = get_history(
-        st.session_state.username
-    )
+    history = get_history()
 
-    if not history:
+    if history:
 
-        st.caption(
+        for row in history[:10]:
+
+            draft_id = row[0]
+            doc_type = row[1]
+            subject = row[5]
+            created = row[8]
+
+            title = subject or doc_type
+
+            with st.expander(
+                f"{title} — {created}"
+            ):
+
+                st.caption(
+                    f"Type: {doc_type}"
+                )
+
+                if st.button(
+                    "Delete",
+                    key=f"delete_{draft_id}",
+                ):
+
+                    delete_draft(draft_id)
+
+                    st.rerun()
+
+                st.text_area(
+                    "Draft",
+                    row[7],
+                    height=150,
+                    key=f"history_{draft_id}",
+                )
+
+    else:
+
+        st.info(
             "No saved drafts yet."
         )
 
-    for (
-        draft_id,
-        created_at,
-        d_type,
-        subj,
-        content,
-    ) in history:
 
-        with st.expander(
-            f"{created_at} — "
-            f"{d_type}: "
-            f"{subj or '(no subject)'}"
-        ):
+# ============================================================
+# MAIN PAGE
+# ============================================================
 
-            st.text(
-                content[:200]
-                + (
-                    "..."
-                    if len(content) > 200
-                    else ""
-                )
-            )
+st.title(
+    "✍️ DraftForge — AI Document Composer"
+)
 
-            c1, c2 = st.columns(2)
+st.write(
+    "Create professional documents using AI."
+)
 
-            if c1.button(
-                "Load",
-                key=f"load_{draft_id}",
-            ):
-
-                st.session_state.draft = (
-                    content
-                )
-
-                st.rerun()
-
-            if c2.button(
-                "Delete",
-                key=f"del_{draft_id}",
-            ):
-
-                delete_draft(
-                    draft_id
-                )
-
-                st.rerun()
+st.divider()
 
 
-# ==========================================================================
-# MAIN FORM
-# ==========================================================================
+# ============================================================
+# INPUT FORM
+# ============================================================
 
 col1, col2 = st.columns(2)
 
 
 with col1:
 
-    doc_type = st.selectbox(
-        "Document type",
+    document_type = st.selectbox(
+        "Document Type",
         DOC_TYPES,
     )
 
@@ -1004,101 +946,106 @@ with col1:
     )
 
     recipient = st.text_input(
-        "Recipient / audience (optional)"
+        "Recipient",
+        placeholder="e.g. Manager",
     )
 
     sender = st.text_input(
-        "Your name / sender (optional)"
+        "Sender",
+        value=profile_name,
+        placeholder="Your name",
     )
 
 
 with col2:
 
     subject = st.text_input(
-        "Subject / purpose"
+        "Subject",
+        placeholder="e.g. Request for grant of bonus salary",
     )
 
     key_points = st.text_area(
-        "Key points to include",
-        height=100,
+        "Key Points / Details",
+        placeholder=(
+            "Enter the important information "
+            "you want included..."
+        ),
+        height=180,
     )
 
-    extra = st.text_area(
-        "Any other instructions (optional)",
-        height=68,
-    )
 
+st.divider()
+
+
+# ============================================================
+# GENERATE
+# ============================================================
 
 generate = st.button(
-    "✨ Generate draft",
+    "✨ Generate Draft",
     type="primary",
     use_container_width=True,
 )
 
-
-# ==========================================================================
-# DRAFT STATE
-# ==========================================================================
-
-if "draft" not in st.session_state:
-
-    st.session_state.draft = ""
-
-
-# ==========================================================================
-# GENERATE
-# ==========================================================================
 
 if generate:
 
     if not api_key:
 
         st.error(
-            "API key is not configured. "
-            "Please add the appropriate API key "
-            "to Streamlit Secrets."
+            "Please configure the selected API key "
+            "in Streamlit Secrets first."
         )
 
-    elif not subject and not key_points:
+    elif not key_points.strip():
 
-        st.error(
-            "Please provide at least a subject "
-            "or some key points."
+        st.warning(
+            "Please enter some key points or details."
         )
 
     else:
 
         prompt = build_prompt(
-            doc_type,
-            tone,
-            recipient,
-            sender,
-            subject,
-            key_points,
-            extra,
+            document_type=document_type,
+            tone=tone,
+            recipient=recipient,
+            sender=sender,
+            subject=subject,
+            key_points=key_points,
         )
 
         with st.spinner(
-            "Composing your document..."
+            "Generating your professional draft..."
         ):
 
             try:
 
-                result = generate_document(
-                    provider,
-                    api_key,
-                    prompt,
-                )
+                if provider == "Groq (Llama 3.3)":
 
-                st.session_state.draft = (
-                    result
-                )
+                    generated = call_groq(
+                        api_key,
+                        prompt,
+                    )
+
+                else:
+
+                    generated = call_gemini(
+                        api_key,
+                        prompt,
+                    )
+
+                st.session_state[
+                    "generated_draft"
+                ] = generated
 
                 save_draft(
-                    st.session_state.username,
-                    doc_type,
+                    document_type,
+                    tone,
+                    recipient,
+                    sender,
                     subject,
-                    result,
+                    key_points,
+                    generated,
                 )
 
                 st.success(
@@ -1108,144 +1055,177 @@ if generate:
             except Exception as e:
 
                 st.error(
-                    "Something went wrong."
-                )
-
-                st.code(
                     str(e)
                 )
 
 
-# ==========================================================================
-# DISPLAY / EDIT / EXPORT
-# ==========================================================================
+# ============================================================
+# DRAFT EDITOR
+# ============================================================
 
-if st.session_state.draft:
+if "generated_draft" in st.session_state:
 
     st.subheader(
-        "Your draft — edit freely below"
+        "📝 Your draft — edit freely below"
     )
 
     edited = st.text_area(
         "Draft",
-        value=st.session_state.draft,
-        height=350,
-        label_visibility="collapsed",
+        value=st.session_state[
+            "generated_draft"
+        ],
+        height=500,
+        key="draft_editor",
     )
 
-    st.session_state.draft = edited
+    # Keep session state updated
+    st.session_state[
+        "generated_draft"
+    ] = edited
+
+    st.divider()
+
+    # ========================================================
+    # EXPORT
+    # ========================================================
 
     st.subheader(
-        "Export"
-    )
-
-    filename = st.text_input(
-        "File name (no extension)",
-        value=(
-            f"{doc_type.replace(' ', '_').lower()}_"
-            f"{datetime.now().strftime('%Y%m%d')}"
-        ),
+        "📤 Export"
     )
 
     fmt = st.radio(
-        "Format",
+        "Choose format",
         [
             "PDF",
             "DOCX",
             "TXT",
             "PNG",
-            "JPG",
         ],
         horizontal=True,
     )
 
-    if edited.strip():
+    # --------------------------------------------------------
+    # PDF
+    # --------------------------------------------------------
 
-        if fmt == "PDF":
+    if fmt == "PDF":
 
-            data = export_pdf(
+        try:
+
+            pdf_data = export_pdf(
                 edited,
-                company,
-                address,
-                logo_bytes,
+                sender=sender,
+                recipient=recipient,
+                subject=subject,
+                logo=logo_bytes,
             )
 
-            mime = "application/pdf"
-            ext = "pdf"
+            st.download_button(
+                label="⬇️ Download PDF",
+                data=pdf_data,
+                file_name="draftforge_document.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
-        elif fmt == "DOCX":
+        except Exception as e:
 
-            data = export_docx(
+            st.error(
+                f"PDF export failed: {str(e)}"
+            )
+
+    # --------------------------------------------------------
+    # DOCX
+    # --------------------------------------------------------
+
+    elif fmt == "DOCX":
+
+        try:
+
+            docx_data = export_docx(
                 edited,
-                company,
-                address,
-                logo_bytes,
+                sender=sender,
+                recipient=recipient,
+                subject=subject,
+                logo=logo_bytes,
             )
 
-            mime = (
-                "application/"
-                "vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
+            st.download_button(
+                label="⬇️ Download DOCX",
+                data=docx_data,
+                file_name="draftforge_document.docx",
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.wordprocessingml.document"
+                ),
+                use_container_width=True,
             )
 
-            ext = "docx"
+        except Exception as e:
 
-        elif fmt == "TXT":
+            st.error(
+                f"DOCX export failed: {str(e)}"
+            )
 
-            data = export_txt(
+    # --------------------------------------------------------
+    # TXT
+    # --------------------------------------------------------
+
+    elif fmt == "TXT":
+
+        try:
+
+            txt_data = export_txt(
                 edited
             )
 
-            mime = "text/plain"
-            ext = "txt"
-
-        elif fmt == "PNG":
-
-            data = export_image(
-                edited,
-                company,
-                address,
-                logo_bytes,
-                "PNG",
+            st.download_button(
+                label="⬇️ Download TXT",
+                data=txt_data,
+                file_name="draftforge_document.txt",
+                mime="text/plain",
+                use_container_width=True,
             )
 
-            mime = "image/png"
-            ext = "png"
+        except Exception as e:
 
-        else:
-
-            data = export_image(
-                edited,
-                company,
-                address,
-                logo_bytes,
-                "JPG",
+            st.error(
+                f"TXT export failed: {str(e)}"
             )
 
-            mime = "image/jpeg"
-            ext = "jpg"
+    # --------------------------------------------------------
+    # PNG
+    # --------------------------------------------------------
 
-        st.download_button(
-            f"⬇️ Download as {fmt}",
-            data=data,
-            file_name=f"{filename}.{ext}",
-            mime=mime,
-            use_container_width=True,
-        )
+    elif fmt == "PNG":
 
-    if st.button(
-        "💾 Save current edits to history"
-    ):
+        try:
 
-        save_draft(
-            st.session_state.username,
-            doc_type,
-            subject,
-            edited,
-        )
+            png_data = export_image(
+                edited
+            )
 
-        st.success(
-            "Saved!"
-        )
+            st.download_button(
+                label="⬇️ Download PNG",
+                data=png_data,
+                file_name="draftforge_document.png",
+                mime="image/png",
+                use_container_width=True,
+            )
 
-        st.rerun()
+        except Exception as e:
+
+            st.error(
+                f"PNG export failed: {str(e)}"
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "DraftForge — AI-powered professional document creation"
+            )
