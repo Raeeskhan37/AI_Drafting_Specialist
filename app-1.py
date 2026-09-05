@@ -26,7 +26,7 @@ st.set_page_config(
 
 
 # ============================================================
-# APPLICATION CONFIGURATION
+# CONFIGURATION
 # ============================================================
 
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -80,6 +80,9 @@ DB_PATH = os.path.join(
 if "generated_draft" not in st.session_state:
     st.session_state.generated_draft = ""
 
+if "normal_information" not in st.session_state:
+    st.session_state.normal_information = ""
+
 if "inquiry_indexes" not in st.session_state:
     st.session_state.inquiry_indexes = [
         {
@@ -88,15 +91,13 @@ if "inquiry_indexes" not in st.session_state:
         }
     ]
 
-if "voice_counter" not in st.session_state:
-    st.session_state.voice_counter = 0
-
 
 # ============================================================
 # DATABASE
 # ============================================================
 
 def init_db():
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -108,6 +109,7 @@ def init_db():
     table_exists = cursor.fetchone()
 
     if table_exists is None:
+
         cursor.execute(
             """
             CREATE TABLE drafts (
@@ -126,14 +128,15 @@ def init_db():
         )
 
     else:
+
         cursor.execute(
             "PRAGMA table_info(drafts)"
         )
 
-        existing_columns = set()
-
-        for row in cursor.fetchall():
-            existing_columns.add(row[1])
+        existing_columns = {
+            row[1]
+            for row in cursor.fetchall()
+        }
 
         required_columns = {
             "document_type": "TEXT",
@@ -174,6 +177,7 @@ def save_draft(
     key_points,
     draft,
 ):
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -212,6 +216,7 @@ def save_draft(
 
 
 def get_history():
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -248,19 +253,21 @@ init_db()
 # ============================================================
 
 def get_secret(name):
+
     try:
         return st.secrets.get(
             name,
             "",
         )
+
     except Exception:
+
         return ""
 
 
 def get_api_key(provider):
 
     if provider == "Groq":
-
         return get_secret(
             "GROQ_API_KEY"
         )
@@ -382,10 +389,10 @@ def build_prompt(
 
         language_instruction = (
             "Write the final document in the same "
-            "language used by the user. If multiple "
-            "languages are used, use the dominant "
-            "language unless the context clearly "
-            "requires otherwise."
+            "language used by the user's information. "
+            "If multiple languages are present, use "
+            "the dominant language unless context "
+            "clearly requires another language."
         )
 
     else:
@@ -395,7 +402,7 @@ def build_prompt(
             + output_language
             + ". Translate and professionally adapt "
               "the supplied information while preserving "
-              "its exact intended meaning."
+              "its intended meaning."
         )
 
     inquiry_instruction = ""
@@ -405,36 +412,34 @@ def build_prompt(
         inquiry_instruction = f"""
 This is an official {inquiry_type}.
 
-The user's information is organized into multiple
+The information is organized into multiple
 inquiry indexes.
 
-Treat every index as an important part of the inquiry.
+Every supplied index is important.
 
-Do not unnecessarily remove or merge indexes.
+Preserve the sequence and identity of the indexes.
 
-Maintain the logical sequence of the indexes.
+Do not unnecessarily merge indexes.
 
-Use appropriate official and professional inquiry
-language.
+Use professional official inquiry language.
 
-Clearly distinguish allegations, statements,
-facts, evidence, observations, findings and
-recommendations when the supplied information
-supports such distinctions.
+For FFI Inquiry:
+Use a fact-finding inquiry approach.
 
-Do not invent evidence, statements, dates, names,
-findings or conclusions.
+For E&D Inquiry:
+Use a departmental disciplinary inquiry approach.
 
-If the user has not supplied a fact, do not create it.
+Clearly distinguish between allegations,
+statements, facts, evidence, observations,
+analysis, findings, conclusions and recommendations
+when the supplied information supports such
+distinctions.
 
-For E&D inquiries, maintain a professional
-departmental disciplinary inquiry style.
+Do not invent facts, evidence, statements,
+dates, findings or conclusions.
 
-For FFI inquiries, maintain a professional
-fact-finding inquiry style.
-
-Where appropriate, create headings and subheadings
-based on the supplied indexes.
+If information is missing, use a suitable
+placeholder or omit the unsupported fact.
 """
 
     prompt = f"""
@@ -442,38 +447,38 @@ You are an expert professional writer,
 official correspondence specialist and
 inquiry-document drafting assistant.
 
-Create a polished and professional {document_type}.
+Create a polished professional {document_type}.
 
-Document type:
+DOCUMENT TYPE:
 {document_type}
 
-Inquiry type:
+INQUIRY TYPE:
 {inquiry_type}
 
-Tone:
+TONE:
 {tone}
 
-Recipient:
+RECIPIENT:
 {recipient}
 
-Sender:
+SENDER:
 {sender}
 
-Subject:
+SUBJECT:
 {subject}
 
-User information:
+USER INFORMATION:
 {information}
 
-Desired output language:
+DESIRED OUTPUT LANGUAGE:
 {output_language}
 
-Language instruction:
+LANGUAGE INSTRUCTION:
 {language_instruction}
 
 {inquiry_instruction}
 
-General requirements:
+GENERAL REQUIREMENTS:
 
 1. Preserve the user's intended meaning.
 
@@ -485,45 +490,47 @@ speech-recognition errors.
 4. Do not fabricate names, dates, evidence,
 statements, allegations or findings.
 
-5. Organize the information logically.
+5. Organize information logically.
 
 6. Use professional official language.
 
 7. Make the document ready for practical use.
 
-8. Keep useful placeholders such as
-[Date], [Reference], [Office Name] or
-[Designation] when information is missing.
+8. Keep useful placeholders such as [Date],
+[Reference], [Office Name] or [Designation]
+where appropriate.
 
-9. For Email, include an appropriate greeting
-and closing.
+9. For Email, use appropriate email structure.
 
 10. For Letter, use appropriate official
 letter structure.
 
-11. For Inquiry, preserve the supplied
-index structure and use appropriate
-professional inquiry headings.
+11. For Inquiry, preserve all supplied indexes.
 
-12. Return only the completed document.
+12. For Inquiry, create appropriate headings
+and subheadings where useful.
 
-13. Do not add explanations before or after
+13. Do not unnecessarily remove information
+provided by the user.
+
+14. Do not add explanations before or after
 the document.
 
-14. Do not use markdown code blocks.
+15. Return only the finished document.
 
-15. Do not claim facts that are not contained
-in the user's information.
+16. Do not use markdown code blocks.
 
-16. If information is incomplete, use a suitable
-placeholder instead of inventing information.
+17. Never create unsupported facts.
+
+18. If the user's information is incomplete,
+do not guess.
 """
 
     return prompt.strip()
 
 
 # ============================================================
-# GROQ GENERATION
+# GROQ
 # ============================================================
 
 def call_groq(
@@ -555,8 +562,9 @@ def call_groq(
                         "content": (
                             "You are an expert "
                             "professional writer "
-                            "and official document "
-                            "drafting specialist."
+                            "and official inquiry "
+                            "document drafting "
+                            "specialist."
                         ),
                     },
                     {
@@ -585,7 +593,7 @@ def call_groq(
 
 
 # ============================================================
-# GEMINI GENERATION
+# GEMINI
 # ============================================================
 
 def call_gemini(
@@ -678,7 +686,7 @@ def call_gemini(
 
 
 # ============================================================
-# PDF HELPERS
+# PDF
 # ============================================================
 
 def clean_pdf_text(text):
@@ -720,12 +728,9 @@ def wrap_pdf_line(
 ):
 
     if not text:
-
         return [""]
 
-    words = text.split(
-        " "
-    )
+    words = text.split(" ")
 
     lines = []
     current = ""
@@ -792,11 +797,9 @@ def export_pdf(text):
         text
     )
 
-    paragraphs = cleaned_text.split(
+    for paragraph in cleaned_text.split(
         "\n"
-    )
-
-    for paragraph in paragraphs:
+    ):
 
         if paragraph.strip() == "":
 
@@ -826,7 +829,7 @@ def export_pdf(text):
 
 
 # ============================================================
-# DOCX EXPORT
+# DOCX
 # ============================================================
 
 def export_docx(text):
@@ -871,7 +874,7 @@ def export_docx(text):
 
 
 # ============================================================
-# TXT EXPORT
+# TXT
 # ============================================================
 
 def export_txt(text):
@@ -882,7 +885,7 @@ def export_txt(text):
 
 
 # ============================================================
-# PNG EXPORT
+# PNG
 # ============================================================
 
 def export_png(text):
@@ -899,10 +902,10 @@ def export_png(text):
         font = ImageFont.load_default()
 
     margin = 50
-    line_spacing = 12
     max_width = 1100
+    line_height = 48
 
-    dummy_image = Image.new(
+    dummy = Image.new(
         "RGB",
         (
             max_width,
@@ -912,7 +915,7 @@ def export_png(text):
     )
 
     draw = ImageDraw.Draw(
-        dummy_image
+        dummy
     )
 
     lines = []
@@ -976,11 +979,6 @@ def export_png(text):
             )
 
         lines.append("")
-
-    line_height = (
-        36
-        + line_spacing
-    )
 
     height = max(
         200,
@@ -1159,19 +1157,6 @@ with st.sidebar:
 
                     st.rerun()
 
-    else:
-
-        st.caption(
-            "No drafts saved yet."
-        )
-
-    st.divider()
-
-    st.caption(
-        "DraftForge • AI-powered "
-        "professional document creation"
-    )
-
 
 # ============================================================
 # MAIN HEADER
@@ -1220,17 +1205,14 @@ if document_type == "Inquiry":
     if inquiry_type == "FFI Inquiry":
 
         st.info(
-            "FFI Inquiry: Add as many inquiry "
-            "indexes as required for the "
-            "fact-finding inquiry."
+            "FFI Inquiry — Fact Finding Inquiry"
         )
 
     else:
 
         st.info(
-            "E&D Inquiry: Add as many inquiry "
-            "indexes as required for the "
-            "departmental disciplinary inquiry."
+            "E&D Inquiry — Departmental "
+            "disciplinary inquiry"
         )
 
 
@@ -1245,7 +1227,7 @@ tone = st.selectbox(
 
 
 # ============================================================
-# BASIC DETAILS
+# RECIPIENT / SENDER
 # ============================================================
 
 col1, col2 = st.columns(2)
@@ -1267,6 +1249,10 @@ with col2:
     )
 
 
+# ============================================================
+# SUBJECT
+# ============================================================
+
 subject = st.text_input(
     "📌 Subject",
     placeholder="Enter subject",
@@ -1284,7 +1270,7 @@ output_language = st.selectbox(
 
 
 # ============================================================
-# NORMAL DOCUMENT INPUT
+# NORMAL INPUT
 # ============================================================
 
 def normal_information_box():
@@ -1294,20 +1280,23 @@ def normal_information_box():
     )
 
     st.caption(
-        "Type your information or use the microphone. "
-        "Voice transcription will be added to this "
-        "same text box."
+        "You can type information and/or add "
+        "voice information. Voice transcription "
+        "will be added to the same text box."
     )
 
-    text_key = "normal_information"
+    text_key = (
+        "normal_information"
+    )
 
-    if text_key not in st.session_state:
+    editor_value = st.session_state.get(
+        text_key,
+        "",
+    )
 
-        st.session_state[text_key] = ""
-
-    typed_text = st.text_area(
+    st.text_area(
         "Type or edit your information",
-        value=st.session_state[text_key],
+        value=editor_value,
         height=250,
         key="normal_information_editor",
         placeholder=(
@@ -1315,7 +1304,16 @@ def normal_information_box():
         ),
     )
 
-    st.session_state[text_key] = typed_text
+    current_text = st.session_state.get(
+        "normal_information_editor",
+        "",
+    )
+
+    # Keep application state separate from
+    # the widget's own state.
+    st.session_state[
+        text_key
+    ] = current_text
 
     st.markdown(
         "#### 🎙️ Add information by voice"
@@ -1331,7 +1329,7 @@ def normal_information_box():
 
         if st.button(
             "🎙️ Add Voice to Text Box",
-            key="normal_transcribe",
+            key="normal_transcribe_button",
             use_container_width=True,
         ):
 
@@ -1361,33 +1359,40 @@ def normal_information_box():
                             )
                         )
 
-                        current_text = (
+                        existing = (
                             st.session_state.get(
-                                "normal_information",
+                                text_key,
                                 "",
                             )
                         )
 
-                        if current_text.strip():
+                        if existing.strip():
 
-                            combined_text = (
-                                current_text
+                            combined = (
+                                existing
                                 + "\n"
                                 + transcript
                             )
 
                         else:
 
-                            combined_text = (
+                            combined = (
                                 transcript
                             )
 
+                        # Store result in the
+                        # application state.
                         st.session_state[
-                            "normal_information"
-                        ] = combined_text
+                            text_key
+                        ] = combined
+
+                        st.session_state[
+                            "normal_information_editor"
+                        ] = combined
 
                         st.success(
-                            "Voice added to the text box."
+                            "Voice added to the "
+                            "information."
                         )
 
                         st.rerun()
@@ -1399,7 +1404,7 @@ def normal_information_box():
                         )
 
     return st.session_state.get(
-        "normal_information",
+        text_key,
         "",
     )
 
@@ -1415,8 +1420,9 @@ def inquiry_information_boxes():
     )
 
     st.caption(
-        "Each index can contain information entered "
-        "by typing, voice, or a combination of both."
+        "Add as many indexes as required. "
+        "Each index accepts both typed and "
+        "voice information."
     )
 
     remove_index = None
@@ -1433,38 +1439,56 @@ def inquiry_information_boxes():
             ]
         )
 
+        title_state_key = (
+            "inquiry_title_state_"
+            + str(index_number)
+        )
+
+        text_state_key = (
+            "inquiry_text_state_"
+            + str(index_number)
+        )
+
+        title_widget_key = (
+            "inquiry_title_widget_"
+            + str(index_number)
+        )
+
+        text_widget_key = (
+            "inquiry_text_widget_"
+            + str(index_number)
+        )
+
+        if title_state_key not in st.session_state:
+
+            st.session_state[
+                title_state_key
+            ] = index_data.get(
+                "title",
+                "Index "
+                + str(index_number + 1),
+            )
+
+        if text_state_key not in st.session_state:
+
+            st.session_state[
+                text_state_key
+            ] = index_data.get(
+                "text",
+                "",
+            )
+
         st.markdown(
-            f"#### 📌 Index {index_number + 1}"
+            "#### 📌 Index "
+            + str(index_number + 1)
         )
 
-        title_key = (
-            "inquiry_title_"
-            + str(index_number)
-        )
-
-        text_key = (
-            "inquiry_text_"
-            + str(index_number)
-        )
-
-        if title_key not in st.session_state:
-
-            st.session_state[
-                title_key
-            ] = index_data["title"]
-
-        if text_key not in st.session_state:
-
-            st.session_state[
-                text_key
-            ] = index_data["text"]
-
-        index_title = st.text_input(
+        title_value = st.text_input(
             "Index title",
             value=st.session_state[
-                title_key
+                title_state_key
             ],
-            key=title_key,
+            key=title_widget_key,
             placeholder=(
                 "e.g. Allegation, Statement "
                 "of accused, Witness statement, "
@@ -1472,25 +1496,38 @@ def inquiry_information_boxes():
             ),
         )
 
-        index_text = st.text_area(
+        text_value = st.text_area(
             "Type or edit information",
             value=st.session_state[
-                text_key
+                text_state_key
             ],
             height=180,
-            key=text_key,
+            key=text_widget_key,
             placeholder=(
                 "Type information for this index..."
             ),
         )
 
-        st.session_state.inquiry_indexes[
-            index_number
-        ]["title"] = index_title
+        # IMPORTANT:
+        # Do not modify text_widget_key after
+        # the widget has been instantiated.
+        # Instead, copy the widget value into
+        # our separate application state.
+        st.session_state[
+            title_state_key
+        ] = title_value
+
+        st.session_state[
+            text_state_key
+        ] = text_value
 
         st.session_state.inquiry_indexes[
             index_number
-        ]["text"] = index_text
+        ]["title"] = title_value
+
+        st.session_state.inquiry_indexes[
+            index_number
+        ]["text"] = text_value
 
         voice_key = (
             "inquiry_voice_"
@@ -1542,36 +1579,36 @@ def inquiry_information_boxes():
                                 )
                             )
 
-                            current_text = (
+                            existing = (
                                 st.session_state.get(
-                                    text_key,
+                                    text_state_key,
                                     "",
                                 )
                             )
 
-                            if current_text.strip():
+                            if existing.strip():
 
-                                combined_text = (
-                                    current_text
+                                combined = (
+                                    existing
                                     + "\n"
                                     + transcript
                                 )
 
                             else:
 
-                                combined_text = (
+                                combined = (
                                     transcript
                                 )
 
+                            # Update application state,
+                            # NOT the instantiated widget.
                             st.session_state[
-                                text_key
-                            ] = combined_text
+                                text_state_key
+                            ] = combined
 
                             st.session_state.inquiry_indexes[
                                 index_number
-                            ]["text"] = (
-                                combined_text
-                            )
+                            ]["text"] = combined
 
                             st.success(
                                 "Voice added to Index "
@@ -1671,20 +1708,24 @@ def inquiry_information_boxes():
 
 
 # ============================================================
-# SELECT INPUT FORM
+# DISPLAY INPUT AREA
 # ============================================================
 
 if document_type == "Inquiry":
 
-    information = inquiry_information_boxes()
+    information = (
+        inquiry_information_boxes()
+    )
 
 else:
 
-    information = normal_information_box()
+    information = (
+        normal_information_box()
+    )
 
 
 # ============================================================
-# GENERATE DOCUMENT
+# GENERATE
 # ============================================================
 
 st.divider()
@@ -1797,19 +1838,15 @@ if st.session_state.generated_draft:
         "📤 Export"
     )
 
-    export_col1, export_col2 = st.columns(
-        2
-    )
+    col1, col2 = st.columns(2)
 
-    with export_col1:
-
-        pdf_data = export_pdf(
-            edited_draft
-        )
+    with col1:
 
         st.download_button(
             "📕 Download PDF",
-            data=pdf_data,
+            data=export_pdf(
+                edited_draft
+            ),
             file_name=(
                 "draftforge_document.pdf"
             ),
@@ -1817,13 +1854,11 @@ if st.session_state.generated_draft:
             use_container_width=True,
         )
 
-        docx_data = export_docx(
-            edited_draft
-        )
-
         st.download_button(
             "📘 Download DOCX",
-            data=docx_data,
+            data=export_docx(
+                edited_draft
+            ),
             file_name=(
                 "draftforge_document.docx"
             ),
@@ -1834,15 +1869,13 @@ if st.session_state.generated_draft:
             use_container_width=True,
         )
 
-    with export_col2:
-
-        txt_data = export_txt(
-            edited_draft
-        )
+    with col2:
 
         st.download_button(
             "📄 Download TXT",
-            data=txt_data,
+            data=export_txt(
+                edited_draft
+            ),
             file_name=(
                 "draftforge_document.txt"
             ),
@@ -1850,13 +1883,11 @@ if st.session_state.generated_draft:
             use_container_width=True,
         )
 
-        png_data = export_png(
-            edited_draft
-        )
-
         st.download_button(
             "🖼️ Download PNG",
-            data=png_data,
+            data=export_png(
+                edited_draft
+            ),
             file_name=(
                 "draftforge_document.png"
             ),
