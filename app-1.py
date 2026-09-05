@@ -2,7 +2,7 @@ import io
 import os
 import re
 import json
-import hashlib
+import textwrap
 import requests
 import streamlit as st
 
@@ -126,7 +126,7 @@ st.markdown(
 
 
 # ============================================================
-# PROFILE FUNCTIONS
+# PROFILE
 # ============================================================
 
 def load_user_profile():
@@ -139,7 +139,6 @@ def load_user_profile():
     }
 
     try:
-
         if os.path.exists(PROFILE_FILE):
 
             with open(
@@ -195,52 +194,30 @@ def get_signature(profile):
 
     lines = []
 
-    if profile.get(
-        "name",
-        "",
-    ).strip():
-
+    if profile.get("name", "").strip():
         lines.append(
             profile["name"].strip()
         )
 
-    if profile.get(
-        "designation",
-        "",
-    ).strip():
-
+    if profile.get("designation", "").strip():
         lines.append(
             profile["designation"].strip()
         )
 
-    if profile.get(
-        "contact_no",
-        "",
-    ).strip():
-
+    if profile.get("contact_no", "").strip():
         lines.append(
-            f"Contact No.: "
-            f"{profile['contact_no'].strip()}"
+            f"Contact No.: {profile['contact_no'].strip()}"
         )
 
-    if profile.get(
-        "current_station",
-        "",
-    ).strip():
-
+    if profile.get("current_station", "").strip():
         lines.append(
-            f"Current Station: "
-            f"{profile['current_station'].strip()}"
+            f"Current Station: {profile['current_station'].strip()}"
         )
 
     if not lines:
-
         return ""
 
-    return (
-        "\n\n"
-        + "\n".join(lines)
-    )
+    return "\n\n" + "\n".join(lines)
 
 
 # ============================================================
@@ -272,23 +249,16 @@ def initialize_state():
 
         "document_editor": "",
 
-        # Synchronizes document_editor BEFORE
-        # the widget is created.
         "editor_sync": "",
 
-        # Widget key
         "edit_instruction": "",
 
-        # Synchronizes edit_instruction BEFORE
-        # the widget is created.
-        "edit_instruction_sync": "",
+        # IMPORTANT:
+        # Separate state used to clear/synchronize
+        # the edit_instruction widget BEFORE creation.
+        "edit_instruction_sync": None,
 
         "history": [],
-
-        # Prevent repeated transcription of the same
-        # audio recording after Streamlit reruns.
-        "processed_audio_hashes": [],
-
     }
 
     for key, value in defaults.items():
@@ -302,7 +272,6 @@ def initialize_state():
 
 
     if not st.session_state["profile_name"]:
-
         st.session_state["profile_name"] = profile.get(
             "name",
             "",
@@ -310,7 +279,6 @@ def initialize_state():
 
 
     if not st.session_state["profile_designation"]:
-
         st.session_state["profile_designation"] = profile.get(
             "designation",
             "",
@@ -318,7 +286,6 @@ def initialize_state():
 
 
     if not st.session_state["profile_contact"]:
-
         st.session_state["profile_contact"] = profile.get(
             "contact_no",
             "",
@@ -326,7 +293,6 @@ def initialize_state():
 
 
     if not st.session_state["profile_station"]:
-
         st.session_state["profile_station"] = profile.get(
             "current_station",
             "",
@@ -337,7 +303,7 @@ initialize_state()
 
 
 # ============================================================
-# SECRET / API FUNCTIONS
+# API
 # ============================================================
 
 def get_secret(name):
@@ -347,7 +313,6 @@ def get_secret(name):
         value = st.secrets.get(name)
 
         if value:
-
             return value
 
     except Exception:
@@ -366,7 +331,6 @@ def get_groq_client():
     )
 
     if not api_key:
-
         return None
 
     try:
@@ -381,13 +345,12 @@ def get_groq_client():
 
 
 # ============================================================
-# AI OUTPUT CLEANING
+# AI CLEANING
 # ============================================================
 
 def clean_ai_output(text):
 
     if not text:
-
         return ""
 
     text = text.strip()
@@ -417,7 +380,6 @@ def call_groq(prompt):
     client = get_groq_client()
 
     if client is None:
-
         return None
 
     try:
@@ -433,9 +395,7 @@ def call_groq(prompt):
                         "You are a professional official "
                         "document drafting assistant. "
                         "Use only information supplied by "
-                        "the user. Never invent facts. "
-                        "Follow the user's requested "
-                        "document structure exactly."
+                        "the user. Never invent facts."
                     ),
                 },
                 {
@@ -457,7 +417,7 @@ def call_groq(prompt):
 
 
 # ============================================================
-# GEMINI FALLBACK
+# GEMINI
 # ============================================================
 
 def call_gemini(prompt):
@@ -467,7 +427,6 @@ def call_gemini(prompt):
     )
 
     if not api_key:
-
         return None
 
     url = (
@@ -525,23 +484,15 @@ def call_gemini(prompt):
 
 def ask_ai(prompt):
 
-    result = call_groq(
-        prompt
-    )
+    result = call_groq(prompt)
 
     if result:
-
         return result
 
-
-    result = call_gemini(
-        prompt
-    )
+    result = call_gemini(prompt)
 
     if result:
-
         return result
-
 
     return None
 
@@ -562,31 +513,11 @@ def transcribe_audio(audio_file):
 
         return ""
 
-
     try:
 
-        audio_bytes = audio_file.getvalue()
-
-        if not audio_bytes:
-
-            return ""
-
-
-        audio_hash = hashlib.md5(
-            audio_bytes
-        ).hexdigest()
-
-
-        processed = st.session_state.get(
-            "processed_audio_hashes",
-            [],
+        audio_bytes = (
+            audio_file.getvalue()
         )
-
-
-        if audio_hash in processed:
-
-            return ""
-
 
         transcription = (
             client.audio.transcriptions.create(
@@ -598,17 +529,6 @@ def transcribe_audio(audio_file):
                 model=WHISPER_MODEL,
             )
         )
-
-
-        # Mark this exact recording as processed.
-        processed.append(
-            audio_hash
-        )
-
-        st.session_state[
-            "processed_audio_hashes"
-        ] = processed[-50:]
-
 
         return transcription.text.strip()
 
@@ -622,7 +542,7 @@ def transcribe_audio(audio_file):
 
 
 # ============================================================
-# EMAIL GENERATION
+# EMAIL
 # ============================================================
 
 def generate_email(instruction):
@@ -649,13 +569,11 @@ Rules:
 9. Return only the email body.
 """
 
-    return ask_ai(
-        prompt
-    )
+    return ask_ai(prompt)
 
 
 # ============================================================
-# LETTER GENERATION
+# LETTER
 # ============================================================
 
 def generate_letter(instruction):
@@ -682,13 +600,11 @@ Rules:
 9. Return only the letter content.
 """
 
-    return ask_ai(
-        prompt
-    )
+    return ask_ai(prompt)
 
 
 # ============================================================
-# INQUIRY INDEX MANAGEMENT
+# INDEX MANAGEMENT
 # ============================================================
 
 def next_index_number(index_name):
@@ -740,12 +656,11 @@ def remove_inquiry_index(index_id):
         for item in st.session_state.inquiry_indexes
 
         if item["id"] != index_id
-
     ]
 
 
 # ============================================================
-# VOICE + TEXT INPUT
+# VOICE + TEXT
 # ============================================================
 
 def render_voice_text_input(
@@ -759,16 +674,12 @@ def render_voice_text_input(
         f"**{label}**"
     )
 
-
-    # --------------------------------------------------------
     # MICROPHONE FIRST
-    # --------------------------------------------------------
 
     audio = st.audio_input(
         "🎤 Record Voice",
         key=audio_key,
     )
-
 
     if audio is not None:
 
@@ -776,14 +687,12 @@ def render_voice_text_input(
             audio
         )
 
-
         if transcript:
 
             current = st.session_state.get(
                 text_key,
                 "",
             )
-
 
             if current.strip():
 
@@ -800,10 +709,6 @@ def render_voice_text_input(
                 )
 
 
-    # --------------------------------------------------------
-    # TEXT INPUT
-    # --------------------------------------------------------
-
     text = st.text_area(
         "Type or review your instructions",
         key=text_key,
@@ -811,12 +716,11 @@ def render_voice_text_input(
         label_visibility="collapsed",
     )
 
-
     return text
 
 
 # ============================================================
-# RENDER E&D INDEX
+# INDEX INPUT
 # ============================================================
 
 def render_index_input(index_item):
@@ -825,14 +729,10 @@ def render_index_input(index_item):
     number = index_item["number"]
     unique_id = index_item["id"]
 
-
     heading = name
 
-
     if number > 1:
-
         heading += f" — No. {number}"
-
 
     st.markdown(
         f"### {heading}"
@@ -852,45 +752,29 @@ def render_index_input(index_item):
             "and so on."
         )
 
-
         selected = st.multiselect(
-
             "Select Documents Recorded",
-
             DOCUMENTS_RECORDED,
-
             key=f"documents_{unique_id}",
-
         )
-
 
         other = st.text_input(
-
             "Other document, if any",
-
             key=f"documents_other_{unique_id}",
-
         )
 
-
-        annexure_items = list(
-            selected
-        )
-
+        annexure_items = list(selected)
 
         if other.strip():
-
             annexure_items.append(
                 other.strip()
             )
-
 
         if annexure_items:
 
             st.markdown(
                 "**Automatic Annexure Numbering**"
             )
-
 
             for idx, document in enumerate(
                 annexure_items
@@ -900,22 +784,16 @@ def render_index_input(index_item):
                     65 + idx
                 )
 
-
                 st.write(
                     f"{idx + 1}. "
                     f"{document} — "
                     f"**Annex-{annexure_letter}**"
                 )
 
-
         return {
-
             "type": "documents",
-
             "selected": selected,
-
             "other": other,
-
         }
 
 
@@ -927,70 +805,44 @@ def render_index_input(index_item):
 
         committee_data = {}
 
-
         for role in COMMITTEE_ROLES:
 
             st.markdown(
                 f"**{role}**"
             )
 
-
             col1, col2, col3 = st.columns(3)
-
 
             with col1:
 
                 erp = st.text_input(
                     "ERP#",
-                    key=(
-                        f"erp_"
-                        f"{unique_id}_"
-                        f"{role}"
-                    ),
+                    key=f"erp_{unique_id}_{role}",
                 )
-
 
             with col2:
 
                 member_name = st.text_input(
                     "Name",
-                    key=(
-                        f"name_"
-                        f"{unique_id}_"
-                        f"{role}"
-                    ),
+                    key=f"name_{unique_id}_{role}",
                 )
-
 
             with col3:
 
                 designation = st.text_input(
                     "Designation",
-                    key=(
-                        f"designation_"
-                        f"{unique_id}_"
-                        f"{role}"
-                    ),
+                    key=f"designation_{unique_id}_{role}",
                 )
 
-
             committee_data[role] = {
-
                 "erp": erp,
-
                 "name": member_name,
-
                 "designation": designation,
-
             }
 
-
         return {
-
             "type": "committee",
-
             "data": committee_data,
-
         }
 
 
@@ -999,39 +851,27 @@ def render_index_input(index_item):
     # ========================================================
 
     text_key = (
-        f"inquiry_text_"
-        f"{unique_id}"
+        f"inquiry_text_{unique_id}"
     )
-
 
     audio_key = (
-        f"inquiry_audio_"
-        f"{unique_id}"
+        f"inquiry_audio_{unique_id}"
     )
-
 
     text = render_voice_text_input(
-
         f"Instructions / Information for {name}",
-
         text_key,
-
         audio_key,
-
     )
 
-
     return {
-
         "type": "text",
-
         "text": text,
-
     }
 
 
 # ============================================================
-# QA DETECTION
+# QA
 # ============================================================
 
 def is_qa_heading(line):
@@ -1052,45 +892,28 @@ def parse_markdown_table(
 
     i = start_index
 
-
     while i < len(lines):
 
         line = lines[i].strip()
 
-
         if not line.startswith("|"):
-
             break
 
-
         cells = [
-
             cell.strip()
-
-            for cell in
-            line.strip("|").split("|")
-
+            for cell in line.strip("|").split("|")
         ]
 
-
         if all(
-
             re.fullmatch(
                 r":?-+:?",
-                cell.replace(
-                    " ",
-                    "",
-                ),
+                cell.replace(" ", ""),
             )
-
             for cell in cells
-
         ):
 
             i += 1
-
             continue
-
 
         if len(cells) >= 2:
 
@@ -1101,9 +924,7 @@ def parse_markdown_table(
                 )
             )
 
-
         i += 1
-
 
     return (
         table_rows,
@@ -1112,93 +933,81 @@ def parse_markdown_table(
 
 
 # ============================================================
-# BUILD SELECTED INDEX LIST
+# BUILD SELECTED SECTION LIST
 # ============================================================
 
-def build_selected_sections(index_data):
+def get_selected_section_names(index_data):
 
-    sections = []
-
+    names = []
 
     for item in index_data:
 
         name = item["name"]
 
-        number = item["number"]
-
-
-        if number > 1:
+        if item["number"] > 1:
 
             heading = (
-                f"{name} No. {number}"
+                f"{name} No. {item['number']}"
             )
 
         else:
 
             heading = name
 
+        names.append(heading)
 
-        sections.append(
-            heading
-        )
-
-
-    return sections
+    return names
 
 
 # ============================================================
-# E&D REPORT GENERATION
+# E&D REPORT
 # ============================================================
 
 def generate_ed_report(index_data):
 
+    if not index_data:
+        return None
+
+
     # ========================================================
-    # IMPORTANT
-    #
-    # index_data contains ONLY the indexes that the user
-    # actually added.
-    #
-    # The AI is explicitly restricted to these sections.
+    # IMPORTANT:
+    # ONLY USER-SELECTED INDEXES ARE USED.
     # ========================================================
 
-    selected_sections = build_selected_sections(
-        index_data
+    selected_sections = (
+        get_selected_section_names(
+            index_data
+        )
     )
 
 
-    selected_sections_text = "\n".join(
-        f"{idx + 1}. {section}"
-        for idx, section in enumerate(
+    allowed_sections_text = "\n".join(
+        f"{i + 1}. {name}"
+        for i, name in enumerate(
             selected_sections
         )
     )
 
 
     # ========================================================
-    # USER INFORMATION FOR NORMAL INDEXES
+    # NORMAL INDEX DATA
     # ========================================================
 
     normal_parts = []
-
 
     for item in index_data:
 
         name = item["name"]
 
-
         if name in SPECIAL_INDEXES:
-
             continue
-
 
         text = item.get(
             "text",
             "",
         ).strip()
 
-
         heading = name
-
 
         if item["number"] > 1:
 
@@ -1206,13 +1015,13 @@ def generate_ed_report(index_data):
                 f" No. {item['number']}"
             )
 
-
+        # IMPORTANT:
+        # Even empty selected indexes are represented.
         if text:
 
             normal_parts.append(
-
                 f"""
-SELECTED SECTION:
+SECTION:
 {heading}
 
 USER INFORMATION:
@@ -1223,44 +1032,34 @@ USER INFORMATION:
         else:
 
             normal_parts.append(
-
                 f"""
-SELECTED SECTION:
+SECTION:
 {heading}
 
 USER INFORMATION:
-No information was provided for this index.
+No information was provided by the user for this selected index.
 """
             )
 
 
-    normal_information = (
-        "\n".join(
-            normal_parts
-        )
-        if normal_parts
-        else
-        "No normal text-based indexes were selected."
+    normal_information = "\n".join(
+        normal_parts
     )
 
 
     # ========================================================
     # DOCUMENTS RECORDED
-    #
-    # ONLY BUILD THIS DATA IF USER ACTUALLY SELECTED
-    # DOCUMENTS RECORDED.
     # ========================================================
 
-    documents_selected = False
     documents = []
 
+    documents_selected = False
 
     for item in index_data:
 
         if item["name"] == "Documents Recorded":
 
             documents_selected = True
-
 
             documents.extend(
                 item.get(
@@ -1269,71 +1068,54 @@ No information was provided for this index.
                 )
             )
 
-
             other = item.get(
                 "other",
                 "",
             ).strip()
 
-
             if other:
-
                 documents.append(
                     other
                 )
 
 
-    documents_lines = []
+    annexure_lines = []
 
+    for idx, document in enumerate(
+        documents
+    ):
 
-    if documents_selected:
-
-        for idx, document in enumerate(
-            documents
-        ):
-
-            letter = chr(
-                65 + idx
-            )
-
-
-            documents_lines.append(
-                f"{idx + 1}. "
-                f"{document} — "
-                f"Annex-{letter}"
-            )
-
-
-    if documents_lines:
-
-        documents_text = "\n".join(
-            documents_lines
+        letter = chr(
+            65 + idx
         )
 
-    elif documents_selected:
+        annexure_lines.append(
+            f"{idx + 1}. "
+            f"{document} — "
+            f"Annex-{letter}"
+        )
 
-        documents_text = (
-            "No documents were specified."
+
+    if annexure_lines:
+
+        documents_text = "\n".join(
+            annexure_lines
         )
 
     else:
 
         documents_text = (
-            "DO NOT INCLUDE THIS SECTION. "
-            "Documents Recorded was not selected."
+            "No documents were selected "
+            "by the user."
         )
 
 
     # ========================================================
-    # INQUIRY COMMITTEE
-    #
-    # ONLY BUILD THIS DATA IF USER ACTUALLY SELECTED
-    # INQUIRY COMMITTEE.
+    # COMMITTEE
     # ========================================================
 
     committee_selected = False
     committee_lines = []
-
 
     for item in index_data:
 
@@ -1341,12 +1123,10 @@ No information was provided for this index.
 
             committee_selected = True
 
-
             committee = item.get(
                 "data",
                 {},
             )
-
 
             for role in COMMITTEE_ROLES:
 
@@ -1355,36 +1135,31 @@ No information was provided for this index.
                     {},
                 )
 
-
                 erp = member.get(
                     "erp",
                     "",
                 ).strip()
 
-
-                member_name = member.get(
+                name = member.get(
                     "name",
                     "",
                 ).strip()
-
 
                 designation = member.get(
                     "designation",
                     "",
                 ).strip()
 
-
                 if (
                     erp
-                    or member_name
+                    or name
                     or designation
                 ):
 
                     committee_lines.append(
-
                         f"{role}: "
                         f"ERP# {erp}; "
-                        f"Name: {member_name}; "
+                        f"Name: {name}; "
                         f"Designation: "
                         f"{designation}"
                     )
@@ -1396,69 +1171,53 @@ No information was provided for this index.
             committee_lines
         )
 
-    elif committee_selected:
+    else:
 
         committee_text = (
             "No committee member details "
             "were provided."
         )
 
-    else:
-
-        committee_text = (
-            "DO NOT INCLUDE THIS SECTION. "
-            "Inquiry Committee was not selected."
-        )
-
 
     # ========================================================
-    # SPECIAL DATA INSTRUCTIONS
+    # STRUCTURED SECTIONS
     # ========================================================
 
-    special_information = ""
-
+    structured_information = ""
 
     if documents_selected:
 
-        special_information += f"""
+        structured_information += f"""
 
-DOCUMENTS RECORDED — USER DATA:
+STRUCTURED SECTION:
+Documents Recorded
+
+The application has already assigned the following
+exact annexure labels:
 
 {documents_text}
 
-Rules for Documents Recorded:
-
-- Include this section because the user selected it.
-- Include ONLY the documents listed above.
-- Preserve their order.
-- Preserve the exact annexure labels.
-- Do not renumber annexures.
-- Do not change Annex-A to Annex-1.
-- Do not create additional documents.
-- Do not repeat the Documents Recorded section.
+The AI MUST reproduce these documents and annexure
+labels exactly.
 """
 
 
     if committee_selected:
 
-        special_information += f"""
+        structured_information += f"""
 
-INQUIRY COMMITTEE — USER DATA:
+STRUCTURED SECTION:
+Inquiry Committee
 
 {committee_text}
 
-Rules for Inquiry Committee:
-
-- Include this section because the user selected it.
-- Include only the committee information supplied above.
-- Do not invent committee members.
-- Do not create additional committee members.
-- Do not create another Inquiry Committee section.
+Include Inquiry Committee ONLY because the user
+selected this index.
 """
 
 
     # ========================================================
-    # AI PROMPT — STRICT SECTION CONTROL
+    # CRITICAL AI PROMPT
     # ========================================================
 
     prompt = f"""
@@ -1466,88 +1225,39 @@ Prepare a professional E&D Inquiry Report using ONLY
 the information supplied by the user.
 
 ============================================================
-ABSOLUTE SECTION CONTROL
+CRITICAL SECTION CONTROL
 ============================================================
 
-The user has explicitly selected ONLY the following sections:
+The following are the ONLY sections that the user
+actually selected:
 
-{selected_sections_text}
+{allowed_sections_text}
 
-THE ABOVE LIST IS THE COMPLETE AND EXCLUSIVE LIST OF
-SECTIONS THAT MAY APPEAR IN THE FINAL REPORT.
+These are the ONLY sections permitted in the final report.
 
-You MUST NOT create any heading or section that is not
-present in that list.
+DO NOT create any other section.
 
-This is mandatory.
+In particular:
 
-For example, DO NOT automatically add:
+- DO NOT create Introduction unless it is listed above.
+- DO NOT create Summary of Evidence unless it is listed above.
+- DO NOT create Findings unless it is listed above.
+- DO NOT create Conclusions unless it is listed above.
+- DO NOT create Recommendations unless it is listed above.
+- DO NOT create Discussion unless it is listed above.
+- DO NOT create Inquiry Committee unless it is listed above.
+- DO NOT create Documents Recorded unless it is listed above.
+- DO NOT create any generic E&D report sections.
+- DO NOT add an opening overview.
+- DO NOT add a closing summary.
+- DO NOT add sections because they are normally present
+  in an E&D inquiry report.
 
-- Introduction
-- Background
-- Summary
-- Summary of Evidence
-- Evidence
-- Analysis
-- Findings
-- Findings on Each Charge
-- Discussion
-- Conclusion
-- Recommendations
-- Inquiry Committee
-- Documents Recorded
-- Any other standard inquiry-report section
-
-UNLESS that exact section was selected by the user and
-appears in the selected-section list above.
-
-If the user selected only:
-
-Documents Recorded
-
-then the final report MUST contain ONLY:
-
-Documents Recorded
-
-and nothing else.
-
-If the user selected only:
-
-Statement of the Accused
-
-then the final report MUST contain ONLY:
-
-Statement of the Accused
-
-and its relevant content.
-
-Do not add an Introduction before it.
-
-Do not add a Conclusion after it.
-
-Do not add Recommendations after it.
-
-Do not add an Inquiry Committee section.
-
-Do not add Documents Recorded.
+The final report must contain ONLY the selected sections
+listed above and must follow their order.
 
 ============================================================
-SECTION ORDER
-============================================================
-
-Use the exact order of the selected-section list.
-
-Do not rearrange the sections.
-
-Do not merge separate selected sections.
-
-Do not split one selected section into multiple headings.
-
-Use the exact section names supplied in the selected-section
-list.
-
-============================================================
-FACTUAL ACCURACY
+FACTUAL RULES
 ============================================================
 
 1. Use professional official English.
@@ -1557,80 +1267,62 @@ FACTUAL ACCURACY
 5. NEVER invent facts.
 6. NEVER invent names.
 7. NEVER invent dates.
-8. NEVER invent reference numbers.
-9. NEVER invent allegations.
-10. NEVER invent witnesses.
-11. NEVER invent evidence.
-12. NEVER invent findings.
-13. NEVER invent recommendations.
-14. NEVER invent events or decisions.
-15. Do not assume missing information.
-16. Do not add information merely because it is normally
-    present in an E&D inquiry report.
-
-If a selected normal section has no information, retain the
-selected heading and write a short statement such as:
-
-"No information was provided for this index."
-
-Do NOT compensate for missing information by creating
-other sections.
+8. NEVER invent allegations.
+9. NEVER invent witnesses.
+10. NEVER invent evidence.
+11. NEVER invent findings.
+12. NEVER invent recommendations.
+13. NEVER assume missing information.
+14. Do not add facts merely because they are common in
+    E&D inquiry reports.
+15. Do not add information from your own knowledge.
 
 ============================================================
-DOCUMENTS RECORDED
+SELECTED INDEX INFORMATION
 ============================================================
 
-{special_information}
+{normal_information}
 
-If Documents Recorded was NOT selected, it MUST NOT appear
-anywhere in the final report.
-
-If Documents Recorded WAS selected:
-
-- Include it only once.
-- Include only the documents supplied by the user.
-- Preserve the exact annexure labels.
-- Annexures are generated by the application.
-- Do not change the annexure labels.
-
-For example:
-
-Documents Recorded
-
-1. CNICF — Annex-A
-2. Marriage Certificate — Annex-B
-3. Statement of Accused — Annex-C
-
-Do not change:
-
-Annex-A
-
-to:
-
-Annex-1
-
-Do not create missing annexures.
+{structured_information}
 
 ============================================================
-INQUIRY COMMITTEE
+DOCUMENTS RECORDED RULES
 ============================================================
 
-If Inquiry Committee was NOT selected, it MUST NOT appear
-anywhere in the final report.
+If and ONLY IF "Documents Recorded" appears in the
+selected section list:
 
-If Inquiry Committee WAS selected:
+- Include Documents Recorded exactly once.
+- Include ONLY documents actually selected.
+- Preserve the exact document names.
+- Preserve the exact automatically assigned annexures.
+- Do NOT renumber annexures.
+- Do NOT change Annex-A into Annex-1.
+- Do NOT skip letters.
+- Do NOT create additional documents.
 
-- Include it only once.
-- Use only supplied ERP#, names and designations.
+The annexures are controlled by the application.
+
+============================================================
+INQUIRY COMMITTEE RULES
+============================================================
+
+If and ONLY IF "Inquiry Committee" appears in the
+selected section list:
+
+- Include Inquiry Committee exactly once.
+- Use only the supplied committee information.
 - Do not invent members.
-- Do not add committee members.
-- Do not create an empty generic committee section.
+- Do not invent ERP numbers.
+- Do not invent designations.
+- Do not create an empty committee section if the index
+  was not selected.
 
 ============================================================
-QUESTIONS / ANSWERS
+QUESTIONS / ANSWERS RULE
 ============================================================
 
-Whenever the selected sections contain:
+Whenever a selected section is:
 
 Questions / Answers with the Accused
 
@@ -1638,57 +1330,48 @@ or:
 
 Questions / Answers with the Accused No. 2
 Questions / Answers with the Accused No. 3
-etc.
 
-the output MUST use this exact two-column Markdown table:
+the section MUST use exactly this two-column Markdown
+table structure:
 
 | Questions | Answers |
 |---|---|
 | 1. Question | Answer |
 | 2. Question | Answer |
 
-Requirements:
+Do not merge questions and answers.
 
-- First column = Questions.
-- Second column = Answers.
-- First row must contain Questions and Answers.
-- Each question-answer pair must be a separate row.
-- Do not merge questions and answers into one column.
-- Do not invent questions.
-- Do not invent answers.
-- Preserve the meaning of the supplied information.
+Do not invent questions.
+
+Do not invent answers.
 
 ============================================================
-USER INFORMATION
+FINAL OUTPUT RULE
 ============================================================
 
-{normal_information}
-
-============================================================
-FINAL OUTPUT REQUIREMENT
-============================================================
-
-Return ONLY the final inquiry report.
+Return ONLY the final report.
 
 Do not provide explanations about your drafting.
 
-Do not provide notes to the user.
+Do not mention which sections were omitted.
 
-Do not provide a list of omitted sections.
+Do not mention these instructions.
 
-Do not say which sections were not selected.
-
-Do not add any section not contained in the selected-section
-list.
-
-The final report must contain ONLY the sections explicitly
-selected by the user.
+Do not create headings that are not present in the
+selected section list.
 """
 
 
-    return ask_ai(
+    result = ask_ai(
         prompt
     )
+
+
+    if not result:
+        return None
+
+
+    return result.strip()
 
 
 # ============================================================
@@ -1713,48 +1396,26 @@ def update_profile_from_widgets():
 
     }
 
-
     st.session_state.profile = profile
 
-
-    save_user_profile(
-        profile
-    )
-
+    save_user_profile(profile)
 
     return profile
 
 
 def profile_complete():
 
-    profile = st.session_state.profile
+    profile = (
+        st.session_state.profile
+    )
 
     return all(
-
         [
-
-            profile.get(
-                "name",
-                "",
-            ).strip(),
-
-            profile.get(
-                "designation",
-                "",
-            ).strip(),
-
-            profile.get(
-                "contact_no",
-                "",
-            ).strip(),
-
-            profile.get(
-                "current_station",
-                "",
-            ).strip(),
-
+            profile.get("name", "").strip(),
+            profile.get("designation", "").strip(),
+            profile.get("contact_no", "").strip(),
+            profile.get("current_station", "").strip(),
         ]
-
     )
 
 
@@ -1768,9 +1429,7 @@ def save_to_history(
 ):
 
     if not content:
-
         return
-
 
     item = {
 
@@ -1787,15 +1446,14 @@ def save_to_history(
 
     }
 
-
-    history = st.session_state.history
-
+    history = (
+        st.session_state.history
+    )
 
     history.insert(
         0,
         item,
     )
-
 
     st.session_state.history = (
         history[:20]
@@ -1803,7 +1461,7 @@ def save_to_history(
 
 
 # ============================================================
-# MODIFY DOCUMENT WITH AI
+# MODIFY DOCUMENT
 # ============================================================
 
 def modify_generated_document(
@@ -1835,24 +1493,23 @@ Rules:
 7. Preserve factual meaning.
 8. DO NOT introduce new sections that were not present
    in the current document.
-9. DO NOT add Introduction, Findings, Conclusion,
-   Recommendations, Inquiry Committee, Documents Recorded
-   or any other section unless it already exists in the
-   current document or the user specifically asks for it.
-10. If the document contains Questions / Answers,
-    retain this exact format:
+9. DO NOT create Introduction, Summary, Findings,
+   Recommendations, Conclusion or any other section
+   unless that section already exists in the document.
+10. If the document contains Documents Recorded,
+    preserve the exact document names and Annex-A,
+    Annex-B, Annex-C etc.
+11. Never change annexure labels.
+12. If the document contains Questions / Answers,
+    retain the exact two-column Markdown table:
 
 | Questions | Answers |
 |---|---|
 | 1. Question | Answer |
 | 2. Question | Answer |
 
-11. If the document contains annexures, preserve their
-    exact labels such as Annex-A, Annex-B, Annex-C.
-12. Do not renumber annexures.
 13. Return the complete modified document.
 """
-
 
     return ask_ai(
         prompt
@@ -1866,19 +1523,15 @@ Rules:
 def display_generated_document(text):
 
     if not text:
-
         return
-
 
     lines = text.splitlines()
 
     i = 0
 
-
     while i < len(lines):
 
         line = lines[i]
-
 
         if is_qa_heading(line):
 
@@ -1886,17 +1539,16 @@ def display_generated_document(text):
                 f"### {line.strip()}"
             )
 
-
-            rows, end = parse_markdown_table(
-                lines,
-                i + 1,
+            rows, end = (
+                parse_markdown_table(
+                    lines,
+                    i + 1,
+                )
             )
-
 
             if rows:
 
                 cleaned = []
-
 
                 for q, a in rows:
 
@@ -1905,9 +1557,7 @@ def display_generated_document(text):
                         and
                         a.lower() == "answers"
                     ):
-
                         continue
-
 
                     cleaned.append(
                         {
@@ -1916,29 +1566,20 @@ def display_generated_document(text):
                         }
                     )
 
-
                 if cleaned:
-
-                    st.table(
-                        cleaned
-                    )
-
+                    st.table(cleaned)
 
                 i = end
 
                 continue
 
-
-        st.markdown(
-            line
-        )
-
+        st.markdown(line)
 
         i += 1
 
 
 # ============================================================
-# TXT EXPORT
+# TXT
 # ============================================================
 
 def create_txt(text):
@@ -1949,7 +1590,7 @@ def create_txt(text):
 
 
 # ============================================================
-# DOCX EXPORT
+# DOCX
 # ============================================================
 
 def add_markdown_table_to_docx(
@@ -1958,25 +1599,19 @@ def add_markdown_table_to_docx(
 ):
 
     if not rows:
-
         return
-
 
     table = document.add_table(
         rows=1,
         cols=2,
     )
 
-
     table.style = "Table Grid"
-
 
     header = table.rows[0].cells
 
-
     header[0].text = "Questions"
     header[1].text = "Answers"
-
 
     for question, answer in rows:
 
@@ -1985,12 +1620,11 @@ def add_markdown_table_to_docx(
             and
             answer.lower() == "answers"
         ):
-
             continue
 
-
-        cells = table.add_row().cells
-
+        cells = (
+            table.add_row().cells
+        )
 
         cells[0].text = question
         cells[1].text = answer
@@ -2004,11 +1638,9 @@ def create_docx(text):
 
     i = 0
 
-
     while i < len(lines):
 
         line = lines[i].strip()
-
 
         if not line:
 
@@ -2018,26 +1650,25 @@ def create_docx(text):
 
             continue
 
-
         if is_qa_heading(line):
 
-            paragraph = document.add_paragraph()
-
+            paragraph = (
+                document.add_paragraph()
+            )
 
             run = paragraph.add_run(
                 line
             )
 
-
             run.bold = True
             run.font.size = Pt(13)
 
-
-            rows, end = parse_markdown_table(
-                lines,
-                i + 1,
+            rows, end = (
+                parse_markdown_table(
+                    lines,
+                    i + 1,
+                )
             )
-
 
             if rows:
 
@@ -2046,35 +1677,24 @@ def create_docx(text):
                     rows,
                 )
 
-
                 i = end
 
                 continue
 
-
-        paragraph = document.add_paragraph(
-            line
+        paragraph = (
+            document.add_paragraph(line)
         )
 
-
         for run in paragraph.runs:
-
             run.font.size = Pt(11)
-
 
         i += 1
 
-
     output = io.BytesIO()
 
-
-    document.save(
-        output
-    )
-
+    document.save(output)
 
     output.seek(0)
-
 
     return output.getvalue()
 
@@ -2114,9 +1734,10 @@ def pdf_safe(text):
         "”": '"',
         "•": "-",
         "…": "...",
+        "→": "->",
+        "←": "<-",
 
     }
-
 
     for old, new in replacements.items():
 
@@ -2124,7 +1745,6 @@ def pdf_safe(text):
             old,
             new,
         )
-
 
     return (
         text
@@ -2138,26 +1758,91 @@ def pdf_safe(text):
     )
 
 
+# ============================================================
+# SAFE PDF TEXT WRITER
+# ============================================================
+
+def pdf_write_safe(
+    pdf,
+    text,
+    height=6,
+):
+
+    text = pdf_safe(
+        str(text)
+    )
+
+    if not text:
+        pdf.ln(3)
+        return
+
+    # --------------------------------------------------------
+    # Break very long unbroken strings.
+    # This prevents:
+    #
+    # Not enough horizontal space to render a single character
+    # --------------------------------------------------------
+
+    chunks = []
+
+    for paragraph in text.split("\n"):
+
+        if not paragraph:
+
+            chunks.append("")
+
+            continue
+
+        wrapped = textwrap.wrap(
+            paragraph,
+            width=110,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+
+        if wrapped:
+            chunks.extend(wrapped)
+        else:
+            chunks.append("")
+
+
+    for line in chunks:
+
+        if not line:
+
+            pdf.ln(3)
+
+            continue
+
+        pdf.multi_cell(
+            0,
+            height,
+            line,
+        )
+
+
+# ============================================================
+# PDF QA TABLE
+# ============================================================
+
 def add_pdf_qa_table(
     pdf,
     rows,
 ):
 
     if not rows:
-
         return
 
+    col1 = 80
+    col2 = 105
+
+    # Header
 
     pdf.set_font(
         "Arial",
         "B",
         9,
     )
-
-
-    col1 = 80
-    col2 = 105
-
 
     pdf.cell(
         col1,
@@ -2166,7 +1851,6 @@ def add_pdf_qa_table(
         border=1,
     )
 
-
     pdf.cell(
         col2,
         8,
@@ -2174,16 +1858,13 @@ def add_pdf_qa_table(
         border=1,
     )
 
-
     pdf.ln()
-
 
     pdf.set_font(
         "Arial",
         "",
         8,
     )
-
 
     for question, answer in rows:
 
@@ -2192,87 +1873,116 @@ def add_pdf_qa_table(
             and
             answer.lower() == "answers"
         ):
-
             continue
-
 
         question = pdf_safe(
             question
         )
 
-
         answer = pdf_safe(
             answer
         )
 
+        # Wrap question and answer safely.
+
+        q_lines = textwrap.wrap(
+            question,
+            width=48,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+
+        a_lines = textwrap.wrap(
+            answer,
+            width=62,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+
+        if not q_lines:
+            q_lines = [""]
+
+        if not a_lines:
+            a_lines = [""]
+
+        row_count = max(
+            len(q_lines),
+            len(a_lines),
+        )
+
+        row_height = 5
 
         x = pdf.get_x()
         y = pdf.get_y()
 
+        for row_index in range(
+            row_count
+        ):
 
-        pdf.multi_cell(
-            col1,
-            5,
-            question,
-            border=1,
-        )
+            q_text = (
+                q_lines[row_index]
+                if row_index < len(q_lines)
+                else ""
+            )
 
+            a_text = (
+                a_lines[row_index]
+                if row_index < len(a_lines)
+                else ""
+            )
 
-        q_bottom = pdf.get_y()
+            pdf.set_xy(
+                x,
+                y + row_index * row_height,
+            )
 
+            pdf.cell(
+                col1,
+                row_height,
+                q_text,
+                border=1,
+            )
 
-        pdf.set_xy(
-            x + col1,
-            y,
-        )
+            pdf.set_xy(
+                x + col1,
+                y + row_index * row_height,
+            )
 
-
-        pdf.multi_cell(
-            col2,
-            5,
-            answer,
-            border=1,
-        )
-
-
-        a_bottom = pdf.get_y()
-
-
-        bottom = max(
-            q_bottom,
-            a_bottom,
-        )
-
+            pdf.cell(
+                col2,
+                row_height,
+                a_text,
+                border=1,
+            )
 
         pdf.set_xy(
             x,
-            bottom,
+            y + row_count * row_height,
         )
 
+
+# ============================================================
+# CREATE PDF
+# ============================================================
 
 def create_pdf(text):
 
     pdf = PDFDocument()
-
 
     pdf.set_auto_page_break(
         auto=True,
         margin=20,
     )
 
-
     pdf.add_page()
-
 
     lines = text.splitlines()
 
     i = 0
 
-
     while i < len(lines):
 
         line = lines[i].strip()
-
 
         if not line:
 
@@ -2283,6 +1993,10 @@ def create_pdf(text):
             continue
 
 
+        # ----------------------------------------------------
+        # Q&A SECTION
+        # ----------------------------------------------------
+
         if is_qa_heading(line):
 
             pdf.set_font(
@@ -2291,22 +2005,20 @@ def create_pdf(text):
                 12,
             )
 
-
-            pdf.multi_cell(
-                0,
-                7,
-                pdf_safe(line),
+            pdf_write_safe(
+                pdf,
+                line,
+                height=7,
             )
-
 
             pdf.ln(2)
 
-
-            rows, end = parse_markdown_table(
-                lines,
-                i + 1,
+            rows, end = (
+                parse_markdown_table(
+                    lines,
+                    i + 1,
+                )
             )
-
 
             if rows:
 
@@ -2315,28 +2027,56 @@ def create_pdf(text):
                     rows,
                 )
 
-
                 pdf.ln(4)
-
 
                 i = end
 
                 continue
 
 
-        pdf.set_font(
-            "Arial",
-            "",
-            10,
-        )
+        # ----------------------------------------------------
+        # NORMAL TEXT
+        # ----------------------------------------------------
 
+        # Detect likely headings.
 
-        pdf.multi_cell(
-            0,
-            6,
-            pdf_safe(line),
-        )
+        if (
+            len(line) < 100
+            and (
+                line.endswith(":")
+                or line in ED_INDEXES
+                or re.match(
+                    r"^.+ No\. \d+$",
+                    line,
+                )
+            )
+        ):
 
+            pdf.set_font(
+                "Arial",
+                "B",
+                12,
+            )
+
+            pdf_write_safe(
+                pdf,
+                line,
+                height=7,
+            )
+
+        else:
+
+            pdf.set_font(
+                "Arial",
+                "",
+                10,
+            )
+
+            pdf_write_safe(
+                pdf,
+                line,
+                height=6,
+            )
 
         i += 1
 
@@ -2356,7 +2096,6 @@ def create_png(text):
     margin = 70
     line_height = 32
 
-
     try:
 
         font = ImageFont.truetype(
@@ -2368,9 +2107,7 @@ def create_png(text):
 
         font = ImageFont.load_default()
 
-
     lines = []
-
 
     for raw_line in text.splitlines():
 
@@ -2380,11 +2117,9 @@ def create_png(text):
 
             continue
 
-
         words = raw_line.split()
 
         current = ""
-
 
         for word in words:
 
@@ -2394,13 +2129,11 @@ def create_png(text):
                 + word
             ).strip()
 
-
             try:
 
                 bbox = font.getbbox(
                     test
                 )
-
 
                 width_test = (
                     bbox[2]
@@ -2410,22 +2143,17 @@ def create_png(text):
             except Exception:
 
                 width_test = (
-                    len(test)
-                    * 12
+                    len(test) * 12
                 )
 
-
             if width_test > (
-                width
-                - margin * 2
+                width - margin * 2
             ):
 
                 if current:
-
                     lines.append(
                         current
                     )
-
 
                 current = word
 
@@ -2433,19 +2161,14 @@ def create_png(text):
 
                 current = test
 
-
         if current:
-
-            lines.append(
-                current
-            )
+            lines.append(current)
 
 
     height = max(
         500,
         margin * 2
-        + len(lines)
-        * line_height,
+        + len(lines) * line_height,
     )
 
 
@@ -2458,14 +2181,11 @@ def create_png(text):
         "white",
     )
 
-
     draw = ImageDraw.Draw(
         image
     )
 
-
     y = margin
-
 
     for line in lines:
 
@@ -2479,21 +2199,17 @@ def create_png(text):
             font=font,
         )
 
-
         y += line_height
 
 
     output = io.BytesIO()
-
 
     image.save(
         output,
         format="PNG",
     )
 
-
     output.seek(0)
-
 
     return output.getvalue()
 
@@ -2508,11 +2224,9 @@ with st.sidebar:
         "## 📝 DraftForge"
     )
 
-
     st.caption(
         "AI Document Composer"
     )
-
 
     st.divider()
 
@@ -2525,30 +2239,25 @@ with st.sidebar:
         "### 👤 User Profile"
     )
 
-
     st.text_input(
         "Name",
         key="profile_name",
     )
-
 
     st.text_input(
         "Designation",
         key="profile_designation",
     )
 
-
     st.text_input(
         "Contact No.",
         key="profile_contact",
     )
 
-
     st.text_input(
         "Current Station",
         key="profile_station",
     )
-
 
     if st.button(
         "💾 Save Profile",
@@ -2556,7 +2265,6 @@ with st.sidebar:
     ):
 
         update_profile_from_widgets()
-
 
         st.success(
             "Profile saved."
@@ -2650,41 +2358,30 @@ with st.sidebar:
                     f"{item['type']}**"
                 )
 
-
                 st.caption(
                     item["date"]
                 )
 
-
                 if st.button(
                     "Restore",
-                    key=(
-                        f"restore_"
-                        f"history_"
-                        f"{index}"
-                    ),
+                    key=f"restore_history_{index}",
                 ):
 
                     content = item["content"]
-
 
                     st.session_state.generated_draft = (
                         content
                     )
 
-
                     st.session_state.editable_draft = (
                         content
                     )
-
 
                     st.session_state.editor_sync = (
                         content
                     )
 
-
                     st.rerun()
-
 
         else:
 
@@ -2723,7 +2420,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 st.markdown(
     '<div class="subtitle">'
     'Create professional official documents using '
@@ -2739,13 +2435,11 @@ st.markdown(
 
 document_type = st.selectbox(
     "Select Document Type",
-
     [
         "Email",
         "Letter",
         "Inquiry",
     ],
-
     key="document_type",
 )
 
@@ -2760,20 +2454,15 @@ if document_type == "Email":
         "### 📧 Email"
     )
 
-
     st.info(
         "You can type your instructions or record them "
         "using the microphone."
     )
 
-
-    # MICROPHONE FIRST
-
     audio = st.audio_input(
         "🎤 Record Email Instructions",
         key="email_audio",
     )
-
 
     if audio is not None:
 
@@ -2781,13 +2470,11 @@ if document_type == "Email":
             audio
         )
 
-
         if transcript:
 
             current = (
                 st.session_state.email_instruction
             )
-
 
             if current.strip():
 
@@ -2806,11 +2493,8 @@ if document_type == "Email":
 
     st.text_area(
         "Email Instructions",
-
         key="email_instruction",
-
         height=220,
-
         placeholder=(
             "Example: Draft an email to the regional "
             "office requesting urgent action regarding..."
@@ -2818,7 +2502,7 @@ if document_type == "Email":
     )
 
 
-    # GENERATE AT LAST
+    # GENERATE LAST
 
     if st.button(
         "✨ Generate Email",
@@ -2833,7 +2517,6 @@ if document_type == "Email":
                 "before generating an Email."
             )
 
-
         elif not (
             st.session_state.email_instruction.strip()
         ):
@@ -2841,7 +2524,6 @@ if document_type == "Email":
             st.warning(
                 "Please enter or record your instructions."
             )
-
 
         else:
 
@@ -2853,7 +2535,6 @@ if document_type == "Email":
                     st.session_state.email_instruction
                 )
 
-
             if result:
 
                 final_document = (
@@ -2863,30 +2544,24 @@ if document_type == "Email":
                     )
                 )
 
-
                 st.session_state.generated_draft = (
                     final_document
                 )
-
 
                 st.session_state.editable_draft = (
                     final_document
                 )
 
-
                 st.session_state.editor_sync = (
                     final_document
                 )
-
 
                 save_to_history(
                     "Email",
                     final_document,
                 )
 
-
                 st.rerun()
-
 
             else:
 
@@ -2906,20 +2581,15 @@ elif document_type == "Letter":
         "### 📄 Letter"
     )
 
-
     st.info(
         "You can type your instructions or record them "
         "using the microphone."
     )
 
-
-    # MICROPHONE FIRST
-
     audio = st.audio_input(
         "🎤 Record Letter Instructions",
         key="letter_audio",
     )
-
 
     if audio is not None:
 
@@ -2927,13 +2597,11 @@ elif document_type == "Letter":
             audio
         )
 
-
         if transcript:
 
             current = (
                 st.session_state.letter_instruction
             )
-
 
             if current.strip():
 
@@ -2952,11 +2620,8 @@ elif document_type == "Letter":
 
     st.text_area(
         "Letter Instructions",
-
         key="letter_instruction",
-
         height=220,
-
         placeholder=(
             "Example: Draft a letter to the Director "
             "requesting..."
@@ -2964,7 +2629,7 @@ elif document_type == "Letter":
     )
 
 
-    # GENERATE AT LAST
+    # GENERATE LAST
 
     if st.button(
         "✨ Generate Letter",
@@ -2979,7 +2644,6 @@ elif document_type == "Letter":
                 "before generating a Letter."
             )
 
-
         elif not (
             st.session_state.letter_instruction.strip()
         ):
@@ -2987,7 +2651,6 @@ elif document_type == "Letter":
             st.warning(
                 "Please enter or record your instructions."
             )
-
 
         else:
 
@@ -2999,7 +2662,6 @@ elif document_type == "Letter":
                     st.session_state.letter_instruction
                 )
 
-
             if result:
 
                 final_document = (
@@ -3009,30 +2671,24 @@ elif document_type == "Letter":
                     )
                 )
 
-
                 st.session_state.generated_draft = (
                     final_document
                 )
-
 
                 st.session_state.editable_draft = (
                     final_document
                 )
 
-
                 st.session_state.editor_sync = (
                     final_document
                 )
-
 
                 save_to_history(
                     "Letter",
                     final_document,
                 )
 
-
                 st.rerun()
-
 
             else:
 
@@ -3052,15 +2708,12 @@ elif document_type == "Inquiry":
         "### 🔎 Inquiry"
     )
 
-
     inquiry_type = st.radio(
         "Select Inquiry Type",
-
         [
             "E&D Inquiry",
             "FFI Inquiry",
         ],
-
         horizontal=True,
     )
 
@@ -3087,21 +2740,16 @@ elif document_type == "Inquiry":
             "### E&D Inquiry"
         )
 
-
         st.caption(
             "Add the required indexes. "
             "The same index can be added multiple times."
         )
 
-
         available_indexes = st.selectbox(
             "Select Index to Add",
-
             ED_INDEXES,
-
             key="selected_ed_index",
         )
-
 
         if st.button(
             "➕ Add Index",
@@ -3111,7 +2759,6 @@ elif document_type == "Inquiry":
             add_inquiry_index(
                 available_indexes
             )
-
 
             st.rerun()
 
@@ -3126,21 +2773,17 @@ elif document_type == "Inquiry":
                 "Select an index above and click Add Index."
             )
 
-
         else:
 
             collected_data = []
 
-
-            for item in st.session_state.inquiry_indexes:
+            for item in (
+                st.session_state.inquiry_indexes
+            ):
 
                 col1, col2 = st.columns(
-                    [
-                        8,
-                        1,
-                    ]
+                    [8, 1]
                 )
-
 
                 with col1:
 
@@ -3148,18 +2791,13 @@ elif document_type == "Inquiry":
                         item
                     )
 
-
                 with col2:
 
                     st.write("")
 
-
                     if st.button(
                         "🗑️",
-                        key=(
-                            f"delete_"
-                            f"{item['id']}"
-                        ),
+                        key=f"delete_{item['id']}",
                         help="Remove this index",
                     ):
 
@@ -3167,34 +2805,25 @@ elif document_type == "Inquiry":
                             item["id"]
                         )
 
-
                         st.rerun()
 
 
                 if result:
 
                     collected_data.append(
-
                         {
-                            "name":
-                            item["name"],
-
-                            "number":
-                            item["number"],
-
+                            "name": item["name"],
+                            "number": item["number"],
                             **result,
-
                         }
-
                     )
-
 
                 st.divider()
 
 
-            # ------------------------------------------------
-            # GENERATE INQUIRY
-            # ------------------------------------------------
+            # =================================================
+            # GENERATE
+            # =================================================
 
             if st.button(
                 "✨ Generate Inquiry Report",
@@ -3205,10 +2834,8 @@ elif document_type == "Inquiry":
                 if not collected_data:
 
                     st.warning(
-                        "Please add at least one inquiry "
-                        "index."
+                        "Please add at least one inquiry index."
                     )
-
 
                 else:
 
@@ -3220,32 +2847,26 @@ elif document_type == "Inquiry":
                             collected_data
                         )
 
-
                     if result:
 
                         st.session_state.generated_draft = (
                             result
                         )
 
-
                         st.session_state.editable_draft = (
                             result
                         )
 
-
                         st.session_state.editor_sync = (
                             result
                         )
-
 
                         save_to_history(
                             "E&D Inquiry",
                             result,
                         )
 
-
                         st.rerun()
-
 
                     else:
 
@@ -3263,14 +2884,13 @@ if st.session_state.generated_draft:
 
     st.divider()
 
-
     st.markdown(
         "## 📑 Generated Document"
     )
 
 
     # ========================================================
-    # SYNCHRONIZE DOCUMENT EDITOR BEFORE WIDGET CREATION
+    # EDITOR SYNC
     # ========================================================
 
     if (
@@ -3285,7 +2905,6 @@ if st.session_state.generated_draft:
             st.session_state.editor_sync
         )
 
-
         st.session_state.editor_sync = ""
 
 
@@ -3297,9 +2916,7 @@ if st.session_state.generated_draft:
         st.session_state.document_editor = (
 
             st.session_state.editable_draft
-
             or
-
             st.session_state.generated_draft
 
         )
@@ -3341,17 +2958,14 @@ if st.session_state.generated_draft:
                 edited_document
             )
 
-
             st.session_state.generated_draft = (
                 edited_document
             )
-
 
             save_to_history(
                 document_type,
                 edited_document,
             )
-
 
             st.success(
                 "Changes saved."
@@ -3369,16 +2983,13 @@ if st.session_state.generated_draft:
                 st.session_state.generated_draft
             )
 
-
             st.session_state.editable_draft = (
                 original
             )
 
-
             st.session_state.editor_sync = (
                 original
             )
-
 
             st.rerun()
 
@@ -3395,18 +3006,25 @@ if st.session_state.generated_draft:
     # --------------------------------------------------------
     # CRITICAL FIX:
     #
-    # edit_instruction is a widget key.
-    #
-    # We must synchronize it BEFORE text_area is created.
+    # Apply synchronization BEFORE text_area is created.
     # --------------------------------------------------------
 
-    if "edit_instruction_sync" in st.session_state:
+    if (
+        "edit_instruction_sync"
+        in st.session_state
+    ):
 
-        st.session_state.edit_instruction = (
+        sync_value = (
             st.session_state.pop(
                 "edit_instruction_sync"
             )
         )
+
+        if sync_value is not None:
+
+            st.session_state.edit_instruction = (
+                sync_value
+            )
 
 
     st.text_area(
@@ -3436,17 +3054,12 @@ if st.session_state.generated_draft:
             st.session_state.edit_instruction.strip()
         )
 
-
         current_document = (
 
             st.session_state.editable_draft
-
             or
-
             st.session_state.document_editor
-
             or
-
             st.session_state.generated_draft
 
         )
@@ -3458,13 +3071,11 @@ if st.session_state.generated_draft:
                 "Please enter instructions for the AI."
             )
 
-
         elif not current_document.strip():
 
             st.warning(
                 "There is no document to modify."
             )
-
 
         else:
 
@@ -3472,9 +3083,11 @@ if st.session_state.generated_draft:
                 "AI is modifying the document..."
             ):
 
-                modified = modify_generated_document(
-                    current_document,
-                    instruction,
+                modified = (
+                    modify_generated_document(
+                        current_document,
+                        instruction,
+                    )
                 )
 
 
@@ -3484,36 +3097,31 @@ if st.session_state.generated_draft:
                     modified
                 )
 
-
                 st.session_state.generated_draft = (
                     modified
                 )
 
-
-                # Synchronize the document editor
-                # BEFORE it is instantiated on next rerun.
+                # IMPORTANT:
+                # Do NOT modify document_editor here.
+                # It is already instantiated.
                 st.session_state.editor_sync = (
                     modified
                 )
 
-
                 # IMPORTANT:
+                # Do NOT modify edit_instruction directly.
                 #
-                # DO NOT do:
-                #
-                # st.session_state.edit_instruction = ""
-                #
-                # because edit_instruction is a widget key.
-                #
-                # Instead synchronize it before widget creation.
-                st.session_state.edit_instruction_sync = ""
+                # Instead clear it before the next widget
+                # instantiation.
+                st.session_state.edit_instruction_sync = (
+                    ""
+                )
 
 
                 save_to_history(
                     document_type,
                     modified,
                 )
-
 
                 st.rerun()
 
@@ -3534,21 +3142,15 @@ if st.session_state.generated_draft:
         "### 👁️ Document Preview"
     )
 
-
     preview_document = (
 
         st.session_state.editable_draft
-
         or
-
         edited_document
-
         or
-
         st.session_state.generated_draft
 
     )
-
 
     display_generated_document(
         preview_document
@@ -3563,23 +3165,20 @@ if st.session_state.generated_draft:
         "### 📤 Export Document"
     )
 
-
     export_document = (
 
         st.session_state.editable_draft
-
         or
-
         edited_document
-
         or
-
         st.session_state.generated_draft
 
     )
 
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = (
+        st.columns(4)
+    )
 
 
     # ========================================================
@@ -3594,21 +3193,13 @@ if st.session_state.generated_draft:
                 export_document
             )
 
-
             st.download_button(
-
                 "📕 PDF",
-
                 data=pdf_bytes,
-
                 file_name="draftforge_document.pdf",
-
                 mime="application/pdf",
-
                 use_container_width=True,
-
             )
-
 
         except Exception as e:
 
@@ -3629,24 +3220,16 @@ if st.session_state.generated_draft:
                 export_document
             )
 
-
             st.download_button(
-
                 "📘 DOCX",
-
                 data=docx_bytes,
-
                 file_name="draftforge_document.docx",
-
                 mime=(
                     "application/vnd.openxmlformats-"
                     "officedocument.wordprocessingml.document"
                 ),
-
                 use_container_width=True,
-
             )
-
 
         except Exception as e:
 
@@ -3665,19 +3248,12 @@ if st.session_state.generated_draft:
             export_document
         )
 
-
         st.download_button(
-
             "📄 TXT",
-
             data=txt_bytes,
-
             file_name="draftforge_document.txt",
-
             mime="text/plain",
-
             use_container_width=True,
-
         )
 
 
@@ -3693,21 +3269,13 @@ if st.session_state.generated_draft:
                 export_document
             )
 
-
             st.download_button(
-
                 "🖼️ PNG",
-
                 data=png_bytes,
-
                 file_name="draftforge_document.png",
-
                 mime="image/png",
-
                 use_container_width=True,
-
             )
-
 
         except Exception as e:
 
@@ -3722,11 +3290,9 @@ if st.session_state.generated_draft:
 
 st.markdown("---")
 
-
 st.caption(
     "DraftForge — AI Document Composer"
 )
-
 
 st.caption(
     "Developed by Raees Khan, Assistant Director, NADRA"
