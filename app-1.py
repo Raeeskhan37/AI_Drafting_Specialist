@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import json
 import hashlib
 from datetime import datetime
 
@@ -34,6 +35,8 @@ st.set_page_config(
 GROQ_MODEL = "openai/gpt-oss-120b"
 WHISPER_MODEL = "whisper-large-v3"
 GEMINI_MODEL = "gemini-2.0-flash"
+
+PROFILE_FILE = "draftforge_profile.json"
 
 
 ED_INDEXES = [
@@ -133,6 +136,22 @@ st.markdown(
     border-left: 5px solid orange;
 }
 
+.profile-box {
+    border: 1px solid rgba(128,128,128,0.35);
+    border-radius: 14px;
+    padding: 15px;
+    margin-top: 10px;
+    margin-bottom: 18px;
+    background: rgba(128,128,128,0.04);
+}
+
+.developer-box {
+    border: 1px solid rgba(128,128,128,0.30);
+    border-radius: 12px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -160,6 +179,12 @@ def initialize_state():
         "ed_instances": [],
 
         "history": [],
+
+        # Official profile
+        "profile_name": "",
+        "profile_designation": "",
+        "profile_contact": "",
+        "profile_station": "",
     }
 
     for key, value in defaults.items():
@@ -169,6 +194,199 @@ def initialize_state():
 
 
 initialize_state()
+
+
+# ============================================================
+# PROFILE STORAGE
+# ============================================================
+
+def load_profile():
+
+    if not os.path.exists(PROFILE_FILE):
+        return {}
+
+    try:
+
+        with open(
+            PROFILE_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            data = json.load(file)
+
+            if isinstance(data, dict):
+                return data
+
+    except Exception:
+        pass
+
+    return {}
+
+
+def save_profile():
+
+    profile = {
+        "name": st.session_state.get(
+            "profile_name",
+            "",
+        ).strip(),
+
+        "designation": st.session_state.get(
+            "profile_designation",
+            "",
+        ).strip(),
+
+        "contact": st.session_state.get(
+            "profile_contact",
+            "",
+        ).strip(),
+
+        "station": st.session_state.get(
+            "profile_station",
+            "",
+        ).strip(),
+    }
+
+    try:
+
+        with open(
+            PROFILE_FILE,
+            "w",
+            encoding="utf-8",
+        ) as file:
+
+            json.dump(
+                profile,
+                file,
+                ensure_ascii=False,
+                indent=4,
+            )
+
+        return True
+
+    except Exception as exc:
+
+        st.error(
+            f"Unable to save profile: {exc}"
+        )
+
+        return False
+
+
+def initialize_profile():
+
+    # Only load from file if session profile
+    # is currently empty.
+
+    profile = load_profile()
+
+    if not profile:
+        return
+
+    if not st.session_state.get(
+        "profile_name"
+    ):
+
+        st.session_state.profile_name = (
+            profile.get("name", "")
+        )
+
+    if not st.session_state.get(
+        "profile_designation"
+    ):
+
+        st.session_state.profile_designation = (
+            profile.get("designation", "")
+        )
+
+    if not st.session_state.get(
+        "profile_contact"
+    ):
+
+        st.session_state.profile_contact = (
+            profile.get("contact", "")
+        )
+
+    if not st.session_state.get(
+        "profile_station"
+    ):
+
+        st.session_state.profile_station = (
+            profile.get("station", "")
+        )
+
+
+initialize_profile()
+
+
+# ============================================================
+# OFFICIAL SIGNATURE
+# ============================================================
+
+def get_official_signature():
+
+    name = st.session_state.get(
+        "profile_name",
+        "",
+    ).strip()
+
+    designation = st.session_state.get(
+        "profile_designation",
+        "",
+    ).strip()
+
+    contact = st.session_state.get(
+        "profile_contact",
+        "",
+    ).strip()
+
+    station = st.session_state.get(
+        "profile_station",
+        "",
+    ).strip()
+
+    lines = []
+
+    if name:
+        lines.append(name)
+
+    if designation:
+        lines.append(designation)
+
+    if station:
+        lines.append(station)
+
+    if contact:
+        lines.append(
+            f"Contact: {contact}"
+        )
+
+    if not lines:
+        return ""
+
+    return (
+        "\n\nRegards,\n\n"
+        + "\n".join(lines)
+    )
+
+
+def append_official_signature(draft):
+
+    if not draft:
+        return draft
+
+    signature = get_official_signature()
+
+    if not signature:
+        return draft
+
+    # Avoid adding signature twice.
+    clean_draft = clean_markup(
+        draft
+    ).rstrip()
+
+    return clean_draft + signature
 
 
 # ============================================================
@@ -239,7 +457,9 @@ def transcribe_audio(audio_file):
 
     audio_bytes = audio_file.getvalue()
 
-    audio_buffer = io.BytesIO(audio_bytes)
+    audio_buffer = io.BytesIO(
+        audio_bytes
+    )
 
     audio_buffer.name = "recording.wav"
 
@@ -267,7 +487,9 @@ def audio_signature(audio):
 
     data = audio.getvalue()
 
-    return hashlib.md5(data).hexdigest()
+    return hashlib.md5(
+        data
+    ).hexdigest()
 
 
 # ============================================================
@@ -291,8 +513,15 @@ def clean_markup(text):
         text,
     )
 
-    text = text.replace("**", "")
-    text = text.replace("__", "")
+    text = text.replace(
+        "**",
+        "",
+    )
+
+    text = text.replace(
+        "__",
+        "",
+    )
 
     return text
 
@@ -301,7 +530,10 @@ def clean_markup(text):
 # AI GENERATION
 # ============================================================
 
-def generate_ai(system_prompt, user_prompt):
+def generate_ai(
+    system_prompt,
+    user_prompt,
+):
 
     client = get_groq_client()
 
@@ -324,7 +556,13 @@ def generate_ai(system_prompt, user_prompt):
                 ],
             )
 
-            return response.choices[0].message.content.strip()
+            return (
+                response
+                .choices[0]
+                .message
+                .content
+                .strip()
+            )
 
         except Exception as exc:
 
@@ -336,7 +574,9 @@ def generate_ai(system_prompt, user_prompt):
     # Gemini fallback
     # --------------------------------------------------------
 
-    gemini_key = get_secret("GEMINI_API_KEY")
+    gemini_key = get_secret(
+        "GEMINI_API_KEY"
+    )
 
     if gemini_key:
 
@@ -432,6 +672,9 @@ You are DraftForge, an AI official-document drafting assistant.
 {LANGUAGE_RULES}
 
 Prepare professional government/official correspondence.
+
+Do not add a personal signature or contact information.
+The application will add the user's official signature separately.
 """
 
 
@@ -463,9 +706,12 @@ Every major heading must be formatted:
 
 def add_ed_index(index_name):
 
-    instance_id = len(
-        st.session_state.ed_instances
-    ) + 1
+    instance_id = (
+        len(
+            st.session_state.ed_instances
+        )
+        + 1
+    )
 
     st.session_state.ed_instances.append(
         {
@@ -486,24 +732,30 @@ def remove_ed_index(instance_id):
     ]
 
 
-def get_occurrence(index_name, instance_id):
+def get_occurrence(
+    index_name,
+    instance_id,
+):
 
     count = 0
 
-    for item in st.session_state.ed_instances:
+    for item in (
+        st.session_state.ed_instances
+    ):
 
         if item["index"] == index_name:
-
             count += 1
 
         if item["id"] == instance_id:
-
             return count
 
     return 1
 
 
-def get_display_heading(index_name, occurrence):
+def get_display_heading(
+    index_name,
+    occurrence,
+):
 
     if index_name in [
         "Statement of the Accused",
@@ -564,13 +816,15 @@ def format_ed_headings(text):
 # EMAIL / LETTER COMPOSER
 # ============================================================
 
-def render_composer(prefix, title):
+def render_composer(
+    prefix,
+    title,
+):
 
     text_key = f"{prefix}_input"
     audio_key = f"{prefix}_audio"
     seen_key = f"{prefix}_audio_seen"
 
-    # Ensure state exists BEFORE audio widget.
     if text_key not in st.session_state:
         st.session_state[text_key] = ""
 
@@ -614,9 +868,13 @@ def render_composer(prefix, title):
 
     if audio is not None:
 
-        signature = audio_signature(audio)
+        signature = audio_signature(
+            audio
+        )
 
-        if signature != st.session_state[seen_key]:
+        if signature != (
+            st.session_state[seen_key]
+        ):
 
             with st.spinner(
                 "🎙️ Transcribing your voice..."
@@ -624,15 +882,19 @@ def render_composer(prefix, title):
 
                 try:
 
-                    spoken_text = transcribe_audio(
-                        audio
+                    spoken_text = (
+                        transcribe_audio(
+                            audio
+                        )
                     )
 
-                    st.session_state[text_key] = (
-                        append_text(
-                            st.session_state[text_key],
-                            spoken_text,
-                        )
+                    st.session_state[
+                        text_key
+                    ] = append_text(
+                        st.session_state[
+                            text_key
+                        ],
+                        spoken_text,
                     )
 
                     st.session_state[
@@ -645,7 +907,9 @@ def render_composer(prefix, title):
 
                 except Exception as exc:
 
-                    st.error(str(exc))
+                    st.error(
+                        str(exc)
+                    )
 
     # --------------------------------------------------------
     # MAIN INPUT BOX
@@ -679,22 +943,22 @@ def render_ed_input(item):
 
     instance_id = item["id"]
 
-    text_key = f"ed_text_{instance_id}"
-    audio_key = f"ed_audio_{instance_id}"
+    text_key = (
+        f"ed_text_{instance_id}"
+    )
 
-    # --------------------------------------------------------
-    # Synchronize initial state
-    # --------------------------------------------------------
+    audio_key = (
+        f"ed_audio_{instance_id}"
+    )
 
     if text_key not in st.session_state:
 
-        st.session_state[text_key] = (
-            item.get("text", "")
+        st.session_state[
+            text_key
+        ] = item.get(
+            "text",
+            "",
         )
-
-    # --------------------------------------------------------
-    # AUDIO
-    # --------------------------------------------------------
 
     audio = st.audio_input(
         "🎙️ Record Voice",
@@ -705,9 +969,13 @@ def render_ed_input(item):
 
     if audio is not None:
 
-        signature = audio_signature(audio)
+        signature = audio_signature(
+            audio
+        )
 
-        if item.get("audio_seen") != signature:
+        if item.get(
+            "audio_seen"
+        ) != signature:
 
             with st.spinner(
                 "🎙️ Transcribing voice..."
@@ -716,24 +984,30 @@ def render_ed_input(item):
                 try:
 
                     spoken_text = (
-                        transcribe_audio(audio)
-                    )
-
-                    st.session_state[text_key] = (
-                        append_text(
-                            st.session_state.get(
-                                text_key,
-                                "",
-                            ),
-                            spoken_text,
+                        transcribe_audio(
+                            audio
                         )
                     )
 
-                    item["text"] = (
-                        st.session_state[text_key]
+                    st.session_state[
+                        text_key
+                    ] = append_text(
+                        st.session_state.get(
+                            text_key,
+                            "",
+                        ),
+                        spoken_text,
                     )
 
-                    item["audio_seen"] = signature
+                    item["text"] = (
+                        st.session_state[
+                            text_key
+                        ]
+                    )
+
+                    item[
+                        "audio_seen"
+                    ] = signature
 
                     st.success(
                         "Voice successfully added to this index."
@@ -741,11 +1015,9 @@ def render_ed_input(item):
 
                 except Exception as exc:
 
-                    st.error(str(exc))
-
-    # --------------------------------------------------------
-    # TEXT AREA
-    # --------------------------------------------------------
+                    st.error(
+                        str(exc)
+                    )
 
     current_text = st.text_area(
         "Information",
@@ -769,19 +1041,25 @@ def render_ed_input(item):
 
 def generate_email():
 
-    recipient = st.session_state.get(
-        "email_recipient",
-        "",
+    recipient = (
+        st.session_state.get(
+            "email_recipient",
+            "",
+        )
     )
 
-    subject = st.session_state.get(
-        "email_subject",
-        "",
+    subject = (
+        st.session_state.get(
+            "email_subject",
+            "",
+        )
     )
 
-    instructions = st.session_state.get(
-        "email_input",
-        "",
+    instructions = (
+        st.session_state.get(
+            "email_input",
+            "",
+        )
     )
 
     prompt = f"""
@@ -801,12 +1079,22 @@ Use formal professional language.
 Preserve the user's intended meaning.
 
 Do not invent facts.
+
+Do not include a personal signature.
 """
 
-    return generate_ai(
+    draft = generate_ai(
         NORMAL_SYSTEM_PROMPT,
         prompt,
     )
+
+    if draft:
+
+        draft = append_official_signature(
+            draft
+        )
+
+    return draft
 
 
 # ============================================================
@@ -815,19 +1103,25 @@ Do not invent facts.
 
 def generate_letter():
 
-    recipient = st.session_state.get(
-        "letter_recipient",
-        "",
+    recipient = (
+        st.session_state.get(
+            "letter_recipient",
+            "",
+        )
     )
 
-    subject = st.session_state.get(
-        "letter_subject",
-        "",
+    subject = (
+        st.session_state.get(
+            "letter_subject",
+            "",
+        )
     )
 
-    instructions = st.session_state.get(
-        "letter_input",
-        "",
+    instructions = (
+        st.session_state.get(
+            "letter_input",
+            "",
+        )
     )
 
     today = datetime.now().strftime(
@@ -852,12 +1146,22 @@ User instructions:
 Use formal professional official language.
 
 Do not invent facts.
+
+Do not include a personal signature.
 """
 
-    return generate_ai(
+    draft = generate_ai(
         NORMAL_SYSTEM_PROMPT,
         prompt,
     )
+
+    if draft:
+
+        draft = append_official_signature(
+            draft
+        )
+
+    return draft
 
 
 # ============================================================
@@ -878,14 +1182,18 @@ def render_documents_recorded():
         DOCUMENTS_RECORDED
     ):
 
-        with columns[i % 2]:
+        with columns[
+            i % 2
+        ]:
 
             if st.checkbox(
                 document,
                 key=f"document_recorded_{i}",
             ):
 
-                selected.append(document)
+                selected.append(
+                    document
+                )
 
     return selected
 
@@ -961,7 +1269,9 @@ def generate_ed_report(
 
     sections = []
 
-    for item in st.session_state.ed_instances:
+    for item in (
+        st.session_state.ed_instances
+    ):
 
         occurrence = get_occurrence(
             item["index"],
@@ -1005,7 +1315,9 @@ def generate_ed_report(
         )
 
     committee_text = (
-        "\n".join(committee_lines)
+        "\n".join(
+            committee_lines
+        )
         if committee_lines
         else "Not provided."
     )
@@ -1104,12 +1416,19 @@ def pdf_clean(text):
             new,
         )
 
-    text = clean_markup(text)
+    text = clean_markup(
+        text
+    )
 
     return (
         text
-        .encode("latin-1", "ignore")
-        .decode("latin-1")
+        .encode(
+            "latin-1",
+            "ignore",
+        )
+        .decode(
+            "latin-1"
+        )
     )
 
 
@@ -1129,7 +1448,10 @@ def is_heading(line):
 
     for heading in ED_INDEXES:
 
-        if line.lower() == heading.lower():
+        if (
+            line.lower()
+            == heading.lower()
+        ):
 
             return True
 
@@ -1153,7 +1475,6 @@ def wrap_pdf_line(
     words = text.split()
 
     if not words:
-
         return [""]
 
     lines = []
@@ -1162,21 +1483,33 @@ def wrap_pdf_line(
 
     for word in words:
 
-        if pdf.get_string_width(word) > width:
+        if (
+            pdf.get_string_width(
+                word
+            )
+            > width
+        ):
 
             if current:
 
-                lines.append(current)
+                lines.append(
+                    current
+                )
+
                 current = ""
 
             piece = ""
 
             for char in word:
 
-                test = piece + char
+                test = (
+                    piece + char
+                )
 
                 if (
-                    pdf.get_string_width(test)
+                    pdf.get_string_width(
+                        test
+                    )
                     <= width
                 ):
 
@@ -1186,7 +1519,9 @@ def wrap_pdf_line(
 
                     if piece:
 
-                        lines.append(piece)
+                        lines.append(
+                            piece
+                        )
 
                     piece = char
 
@@ -1201,7 +1536,9 @@ def wrap_pdf_line(
         )
 
         if (
-            pdf.get_string_width(test)
+            pdf.get_string_width(
+                test
+            )
             <= width
         ):
 
@@ -1211,13 +1548,16 @@ def wrap_pdf_line(
 
             if current:
 
-                lines.append(current)
+                lines.append(
+                    current
+                )
 
             current = word
 
     if current:
-
-        lines.append(current)
+        lines.append(
+            current
+        )
 
     return lines
 
@@ -1245,7 +1585,9 @@ def export_pdf(text):
         - pdf.r_margin
     )
 
-    for raw_line in text.splitlines():
+    for raw_line in (
+        text.splitlines()
+    ):
 
         line = pdf_clean(
             raw_line
@@ -1299,7 +1641,9 @@ def export_docx(text):
 
     document = Document()
 
-    for raw_line in text.splitlines():
+    for raw_line in (
+        text.splitlines()
+    ):
 
         line = clean_markup(
             raw_line
@@ -1310,7 +1654,6 @@ def export_docx(text):
         )
 
         if not line:
-
             continue
 
         run = paragraph.add_run(
@@ -1326,7 +1669,9 @@ def export_docx(text):
 
     buffer = io.BytesIO()
 
-    document.save(buffer)
+    document.save(
+        buffer
+    )
 
     return buffer.getvalue()
 
@@ -1339,7 +1684,9 @@ def export_txt(text):
 
     return clean_markup(
         text
-    ).encode("utf-8")
+    ).encode(
+        "utf-8"
+    )
 
 
 # ============================================================
@@ -1354,7 +1701,9 @@ def export_png(text):
 
     lines = []
 
-    for paragraph in clean_text.splitlines():
+    for paragraph in (
+        clean_text.splitlines()
+    ):
 
         if not paragraph:
 
@@ -1519,6 +1868,98 @@ with st.sidebar:
 
     st.divider()
 
+    # ========================================================
+    # MY OFFICIAL INFORMATION
+    # ========================================================
+
+    st.markdown(
+        "### 👤 My Official Information"
+    )
+
+    st.caption(
+        "Save your information once. "
+        "It will automatically appear at the end "
+        "of generated emails and letters."
+    )
+
+    st.text_input(
+        "Name",
+        key="profile_name",
+        placeholder="Enter your full name",
+    )
+
+    st.text_input(
+        "Designation",
+        key="profile_designation",
+        placeholder="e.g. Assistant Director, NADRA",
+    )
+
+    st.text_input(
+        "Contact No.",
+        key="profile_contact",
+        placeholder="Enter official contact number",
+    )
+
+    st.text_input(
+        "Current Station",
+        key="profile_station",
+        placeholder="Enter current station / office",
+    )
+
+    if st.button(
+        "💾 Save Official Information",
+        use_container_width=True,
+    ):
+
+        if not st.session_state.profile_name.strip():
+
+            st.warning(
+                "Please enter your name."
+            )
+
+        elif not st.session_state.profile_designation.strip():
+
+            st.warning(
+                "Please enter your designation."
+            )
+
+        elif save_profile():
+
+            st.success(
+                "Official information saved successfully."
+            )
+
+    # --------------------------------------------------------
+    # PROFILE PREVIEW
+    # --------------------------------------------------------
+
+    if any(
+        [
+            st.session_state.profile_name,
+            st.session_state.profile_designation,
+            st.session_state.profile_contact,
+            st.session_state.profile_station,
+        ]
+    ):
+
+        with st.expander(
+            "👁️ Preview Signature"
+        ):
+
+            st.text(
+                get_official_signature()
+                .replace(
+                    "\n\nRegards,\n\n",
+                    "Regards,\n\n",
+                )
+            )
+
+    st.divider()
+
+    # ========================================================
+    # QUICK GUIDE
+    # ========================================================
+
     st.markdown(
         "### Quick Guide"
     )
@@ -1547,6 +1988,66 @@ PDF • DOCX • TXT • PNG
 
     st.divider()
 
+    # ========================================================
+    # SUGGESTIONS
+    # ========================================================
+
+    st.markdown(
+        "### 💡 Suggestions for Improvement"
+    )
+
+    st.markdown(
+        """
+The following features can be considered
+for future versions:
+
+- 📋 Document templates
+- ✏️ Edit generated document
+- 🔄 Regenerate with changes
+- 🌐 Urdu / English support
+- 📎 Attachment support
+- 📚 Saved document library
+- 🔐 User login and secure profiles
+- 🗂️ Searchable document history
+- 📊 Inquiry progress tracking
+- 🖨️ Improved official printing format
+"""
+    )
+
+    st.divider()
+
+    # ========================================================
+    # ABOUT DEVELOPER
+    # ========================================================
+
+    st.markdown(
+        "### ℹ️ About the Developer"
+    )
+
+    st.markdown(
+        """
+<div class="developer-box">
+
+<b>Developed by:</b> Raees Khan<br>
+<b>Assistant Director, NADRA</b>
+
+<br><br>
+
+AI-powered official correspondence assistant
+designed to improve the efficiency, consistency
+and professionalism of official communication.
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    # ========================================================
+    # CLEAR GENERATED DRAFT
+    # ========================================================
+
     if st.button(
         "🗑️ Clear Generated Draft",
         use_container_width=True,
@@ -1555,6 +2056,10 @@ PDF • DOCX • TXT • PNG
         st.session_state.generated_draft = ""
 
         st.rerun()
+
+    # ========================================================
+    # HISTORY
+    # ========================================================
 
     if st.session_state.history:
 
@@ -1625,15 +2130,21 @@ if document_choice:
 
     if "Email" in document_choice:
 
-        st.session_state.document_type = "Email"
+        st.session_state.document_type = (
+            "Email"
+        )
 
     elif "Letter" in document_choice:
 
-        st.session_state.document_type = "Letter"
+        st.session_state.document_type = (
+            "Letter"
+        )
 
     elif "Inquiry" in document_choice:
 
-        st.session_state.document_type = "Inquiry"
+        st.session_state.document_type = (
+            "Inquiry"
+        )
 
 
 current_type = (
@@ -1674,8 +2185,8 @@ if current_type == "Email":
         "Email Instructions",
     )
 
-    # IMPORTANT:
-    # Generate button is AFTER the complete input area.
+    # Generate button remains AFTER
+    # the complete input area.
 
     if st.button(
         "✨ Generate Email",
@@ -1744,8 +2255,8 @@ elif current_type == "Letter":
         "Letter Instructions",
     )
 
-    # IMPORTANT:
-    # Generate button is AFTER the complete input area.
+    # Generate button remains AFTER
+    # the complete input area.
 
     if st.button(
         "✨ Generate Letter",
@@ -1805,7 +2316,9 @@ elif current_type == "Inquiry":
 
     if inquiry_choice is None:
 
-        inquiry_choice = "⚖️ E&D Inquiry"
+        inquiry_choice = (
+            "⚖️ E&D Inquiry"
+        )
 
     # --------------------------------------------------------
     # FFI
@@ -1891,9 +2404,11 @@ elif current_type == "Inquiry":
                 st.session_state.ed_instances
             ):
 
-                occurrence = get_occurrence(
-                    item["index"],
-                    item["id"],
+                occurrence = (
+                    get_occurrence(
+                        item["index"],
+                        item["id"],
+                    )
                 )
 
                 display_heading = (
@@ -1921,7 +2436,9 @@ elif current_type == "Inquiry":
 
                         if st.button(
                             "🗑️",
-                            key=f"delete_{item['id']}",
+                            key=(
+                                f"delete_{item['id']}"
+                            ),
                             help="Remove this section",
                         ):
 
@@ -1985,9 +2502,11 @@ elif current_type == "Inquiry":
             use_container_width=True,
         ):
 
-            reference_no = st.session_state.get(
-                "inquiry_reference_no",
-                "",
+            reference_no = (
+                st.session_state.get(
+                    "inquiry_reference_no",
+                    "",
+                )
             )
 
             if not reference_no.strip():
@@ -1996,14 +2515,19 @@ elif current_type == "Inquiry":
                     "Please enter the Inquiry Reference No."
                 )
 
-            elif not st.session_state.ed_instances:
+            elif not (
+                st.session_state.ed_instances
+            ):
 
                 st.warning(
                     "Please add at least one inquiry index."
                 )
 
             elif not any(
-                item.get("text", "").strip()
+                item.get(
+                    "text",
+                    "",
+                ).strip()
                 for item
                 in st.session_state.ed_instances
             ):
@@ -2090,7 +2614,9 @@ if st.session_state.generated_draft:
         st.session_state.generated_draft
     )
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(
+        4
+    )
 
     with c1:
 
