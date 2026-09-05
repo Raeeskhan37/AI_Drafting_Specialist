@@ -1,7 +1,7 @@
 import io
 import os
 import sqlite3
-import hashlib
+import uuid
 from datetime import datetime
 
 import requests
@@ -22,12 +22,12 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(
     page_title="DraftForge - AI Document Composer",
     page_icon="📝",
-    layout="wide",
+    layout="wide"
 )
 
 
 # ============================================================
-# CONFIGURATION
+# CONSTANTS
 # ============================================================
 
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -38,22 +38,15 @@ GEMINI_URL = (
     "v1beta/models/gemini-2.0-flash:generateContent"
 )
 
-# Four functional categories:
-# Email
-# Letter
-# FFI Inquiry
-# E&D Inquiry
-#
-# FFI and E&D are handled as inquiry sub-types.
 DOCUMENT_TYPES = [
     "Email",
     "Letter",
-    "Inquiry",
+    "Inquiry"
 ]
 
 INQUIRY_TYPES = [
     "FFI Inquiry",
-    "E&D Inquiry",
+    "E&D Inquiry"
 ]
 
 OUTPUT_LANGUAGES = [
@@ -61,7 +54,7 @@ OUTPUT_LANGUAGES = [
     "Urdu",
     "Pashto",
     "Arabic",
-    "Same as input",
+    "Same as input"
 ]
 
 TONES = [
@@ -71,12 +64,12 @@ TONES = [
     "Persuasive",
     "Apologetic",
     "Assertive",
-    "Neutral",
+    "Neutral"
 ]
 
 
 # ============================================================
-# E&D INQUIRY INDEXES
+# E&D INDEXES
 # ============================================================
 
 ED_INDEXES = [
@@ -100,129 +93,94 @@ ED_INDEXES = [
 
 
 # ============================================================
+# INDEXES THAT GET AUTOMATIC NUMBERING WHEN REPEATED
+# ============================================================
+
+NUMBERABLE_INDEXES = [
+    "Statement of the Accused",
+    "Questions / Answers with the Accused",
+]
+
+
+# ============================================================
+# DOCUMENTS RECORDED
+# ============================================================
+
+DOCUMENT_OPTIONS = [
+    "CNICF",
+    "Birth Certificate (BC)",
+    "Marriage Certificate",
+    "CNICs",
+    "Domicile",
+    "Affidavit",
+    "Complaint / Application",
+    "Written Explanation",
+    "Official Record",
+    "Other",
+]
+
+
+# ============================================================
 # DATABASE
 # ============================================================
 
 DB_PATH = os.path.join(
     os.path.dirname(__file__),
-    "drafts.db",
+    "drafts.db"
 )
 
-
-# ============================================================
-# SESSION STATE INITIALIZATION
-# ============================================================
-
-DEFAULT_STATE = {
-    "generated_draft": "",
-    "normal_information": "",
-
-    "ed_selected_indexes": [],
-    "ed_index_values": {},
-
-    # Multiple accused persons
-    "ed_accused_statements": [],
-
-    "ed_documents": [],
-    "ed_other_document": "",
-
-    "ed_committee": {
-        "Convener of Inquiry": "",
-        "Member 1": "",
-        "Member 2": "",
-        "Departmental Representative": "",
-    },
-
-    # Automatically assigned when Generate is pressed
-    "ed_inquiry_date": "",
-}
-
-
-for key, value in DEFAULT_STATE.items():
-
-    if key not in st.session_state:
-
-        if isinstance(value, list):
-
-            st.session_state[key] = list(value)
-
-        elif isinstance(value, dict):
-
-            st.session_state[key] = dict(value)
-
-        else:
-
-            st.session_state[key] = value
-
-
-# ============================================================
-# DATABASE FUNCTIONS
-# ============================================================
 
 def init_db():
 
     conn = sqlite3.connect(DB_PATH)
+
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name='drafts'"
+        """
+        CREATE TABLE IF NOT EXISTS drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_type TEXT,
+            inquiry_type TEXT,
+            tone TEXT,
+            recipient TEXT,
+            sender TEXT,
+            subject TEXT,
+            key_points TEXT,
+            draft TEXT,
+            created_at TEXT
+        )
+        """
     )
 
-    table_exists = cursor.fetchone()
+    conn.commit()
 
-    if table_exists is None:
+    cursor.execute("PRAGMA table_info(drafts)")
 
-        cursor.execute(
-            """
-            CREATE TABLE drafts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_type TEXT,
-                inquiry_type TEXT,
-                tone TEXT,
-                recipient TEXT,
-                sender TEXT,
-                subject TEXT,
-                key_points TEXT,
-                draft TEXT,
-                created_at TEXT
+    columns = [
+        row[1]
+        for row in cursor.fetchall()
+    ]
+
+    required_columns = {
+        "inquiry_type": "TEXT",
+        "tone": "TEXT",
+        "recipient": "TEXT",
+        "sender": "TEXT",
+        "subject": "TEXT",
+        "key_points": "TEXT",
+        "draft": "TEXT",
+        "created_at": "TEXT",
+    }
+
+    for column, column_type in required_columns.items():
+
+        if column not in columns:
+
+            cursor.execute(
+                f"ALTER TABLE drafts ADD COLUMN "
+                f"{column} {column_type}"
             )
-            """
-        )
-
-    else:
-
-        cursor.execute(
-            "PRAGMA table_info(drafts)"
-        )
-
-        existing_columns = {
-            row[1]
-            for row in cursor.fetchall()
-        }
-
-        required_columns = {
-            "document_type": "TEXT",
-            "inquiry_type": "TEXT",
-            "tone": "TEXT",
-            "recipient": "TEXT",
-            "sender": "TEXT",
-            "subject": "TEXT",
-            "key_points": "TEXT",
-            "draft": "TEXT",
-            "created_at": "TEXT",
-        }
-
-        for column, data_type in required_columns.items():
-
-            if column not in existing_columns:
-
-                cursor.execute(
-                    "ALTER TABLE drafts ADD COLUMN "
-                    + column
-                    + " "
-                    + data_type
-                )
 
     conn.commit()
     conn.close()
@@ -236,15 +194,17 @@ def save_draft(
     sender,
     subject,
     key_points,
-    draft,
+    draft
 ):
 
     conn = sqlite3.connect(DB_PATH)
+
     cursor = conn.cursor()
 
     cursor.execute(
         """
-        INSERT INTO drafts (
+        INSERT INTO drafts
+        (
             document_type,
             inquiry_type,
             tone,
@@ -269,7 +229,7 @@ def save_draft(
             datetime.now().strftime(
                 "%Y-%m-%d %H:%M:%S"
             ),
-        ),
+        )
     )
 
     conn.commit()
@@ -279,6 +239,7 @@ def save_draft(
 def get_history():
 
     conn = sqlite3.connect(DB_PATH)
+
     cursor = conn.cursor()
 
     cursor.execute(
@@ -310,16 +271,41 @@ init_db()
 
 
 # ============================================================
+# SESSION STATE
+# ============================================================
+
+DEFAULT_STATE = {
+    "generated_draft": "",
+    "normal_information": "",
+    "normal_voice_status": "",
+    "ed_index_instances": [],
+    "ed_index_selector": "-- Select an index --",
+}
+
+for key, value in DEFAULT_STATE.items():
+
+    if key not in st.session_state:
+
+        if isinstance(value, list):
+            st.session_state[key] = []
+
+        elif isinstance(value, dict):
+            st.session_state[key] = dict(value)
+
+        else:
+            st.session_state[key] = value
+
+
+# ============================================================
 # API KEY FUNCTIONS
 # ============================================================
 
 def get_secret(name):
 
     try:
-
         return st.secrets.get(
             name,
-            "",
+            ""
         )
 
     except Exception:
@@ -346,20 +332,33 @@ def get_api_key(provider):
 
 def transcribe_audio(
     api_key,
-    audio_file,
+    audio_file
 ):
 
     if not api_key:
 
         raise ValueError(
-            "GROQ_API_KEY is not configured "
-            "in Streamlit Secrets."
+            "Groq API key is not configured."
         )
 
     if audio_file is None:
 
         raise ValueError(
-            "No audio recording was provided."
+            "No audio recording was found."
+        )
+
+    audio_bytes = audio_file.getvalue()
+
+    if not audio_bytes:
+
+        raise ValueError(
+            "The audio recording is empty."
+        )
+
+    if len(audio_bytes) > 25 * 1024 * 1024:
+
+        raise ValueError(
+            "Audio file is larger than 25 MB."
         )
 
     try:
@@ -370,429 +369,865 @@ def transcribe_audio(
             api_key=api_key
         )
 
-        audio_bytes = audio_file.getvalue()
-
-        if not audio_bytes:
-
-            raise ValueError(
-                "The recording is empty."
-            )
-
-        if len(audio_bytes) > (
-            25 * 1024 * 1024
-        ):
-
-            raise ValueError(
-                "The recording is larger than "
-                "25 MB. Please make a shorter recording."
-            )
-
         filename = getattr(
             audio_file,
             "name",
-            "recording.wav",
+            "recording.wav"
         )
 
-        if not filename:
-
-            filename = "recording.wav"
-
-        result = (
-            client.audio.transcriptions.create(
-                file=(
-                    filename,
-                    audio_bytes,
-                ),
-                model=WHISPER_MODEL,
-                response_format="json",
-                temperature=0.0,
-            )
+        result = client.audio.transcriptions.create(
+            file=(
+                filename,
+                audio_bytes
+            ),
+            model=WHISPER_MODEL,
+            response_format="json",
+            temperature=0.0,
         )
 
         text = getattr(
             result,
             "text",
-            "",
+            ""
         )
-
-        if not text:
-
-            raise RuntimeError(
-                "No speech could be detected."
-            )
 
         return text.strip()
 
     except Exception as e:
 
         raise RuntimeError(
-            "Speech-to-text error: "
-            + str(e)
-        ) from e
+            f"Voice transcription failed: {e}"
+        )
 
 
 # ============================================================
-# VOICE CALLBACK HELPERS
+# VOICE -> TEXT
 # ============================================================
 
 def append_voice_to_widget(
     audio_key,
     text_widget_key,
-    state_storage_key,
+    status_key
 ):
 
-    audio = st.session_state.get(
+    audio_file = st.session_state.get(
         audio_key
     )
 
-    if audio is None:
+    if not audio_file:
+
+        st.session_state[
+            status_key
+        ] = "Please record your voice first."
 
         return
 
+    api_key = get_api_key(
+        "Groq"
+    )
+
     try:
 
-        groq_key = get_secret(
-            "GROQ_API_KEY"
+        transcribed_text = transcribe_audio(
+            api_key,
+            audio_file
         )
 
-        if not groq_key:
+        if not transcribed_text:
 
             st.session_state[
-                "voice_error"
-            ] = (
-                "GROQ_API_KEY is not configured "
-                "in Streamlit Secrets."
-            )
+                status_key
+            ] = "No speech was detected."
 
             return
 
-        transcript = transcribe_audio(
-            groq_key,
-            audio,
-        )
-
-        existing = st.session_state.get(
+        existing_text = st.session_state.get(
             text_widget_key,
-            "",
+            ""
         )
 
-        if existing.strip():
+        if existing_text.strip():
 
-            combined = (
-                existing.rstrip()
+            combined_text = (
+                existing_text.rstrip()
                 + "\n"
-                + transcript
+                + transcribed_text
             )
 
         else:
 
-            combined = transcript
+            combined_text = transcribed_text
 
-        # Callback executes before the next
-        # page render, therefore updating the
-        # widget state here is safe.
         st.session_state[
             text_widget_key
-        ] = combined
+        ] = combined_text
 
         st.session_state[
-            state_storage_key
-        ] = combined
-
-        st.session_state[
-            "voice_success"
-        ] = (
-            "Voice information added "
-            "to the text box."
-        )
+            status_key
+        ] = "Voice text added successfully."
 
     except Exception as e:
 
         st.session_state[
-            "voice_error"
+            status_key
         ] = str(e)
 
 
 def add_normal_voice():
 
     append_voice_to_widget(
-        audio_key="normal_voice_recorder",
-        text_widget_key="normal_information_editor",
-        state_storage_key="normal_information",
+        "normal_voice",
+        "normal_information",
+        "normal_voice_status"
     )
 
 
 def add_inquiry_voice(
-    index_name
+    instance_id
 ):
 
     append_voice_to_widget(
-        audio_key=(
-            "ed_voice_"
-            + index_name
-        ),
-        text_widget_key=(
-            "ed_text_"
-            + index_name
-        ),
-        state_storage_key=(
-            "ed_state_"
-            + index_name
-        ),
-    )
-
-
-def add_accused_voice(
-    accused_number
-):
-
-    append_voice_to_widget(
-        audio_key=(
-            f"ed_accused_voice_{accused_number}"
-        ),
-        text_widget_key=(
-            f"ed_accused_text_{accused_number}"
-        ),
-        state_storage_key=(
-            f"ed_accused_state_{accused_number}"
-        ),
+        f"ed_voice_{instance_id}",
+        f"ed_text_{instance_id}",
+        f"ed_state_{instance_id}"
     )
 
 
 # ============================================================
-# AI PROMPT
+# AUTOMATIC INDEX NUMBERING
+# ============================================================
+
+def get_display_index_name(
+    instances,
+    current_instance
+):
+
+    index_name = current_instance[
+        "name"
+    ]
+
+    current_id = current_instance[
+        "id"
+    ]
+
+    # Only these two indexes are automatically numbered.
+    if index_name not in NUMBERABLE_INDEXES:
+
+        return index_name
+
+    matching_instances = [
+        instance
+        for instance in instances
+        if instance["name"] == index_name
+    ]
+
+    # If selected only once, keep original name.
+    if len(matching_instances) == 1:
+
+        return index_name
+
+    # If selected more than once, determine
+    # this instance's occurrence number.
+    for number, instance in enumerate(
+        matching_instances,
+        start=1
+    ):
+
+        if instance["id"] == current_id:
+
+            return (
+                f"{index_name} No. {number}"
+            )
+
+    return index_name
+
+
+# ============================================================
+# SELECT E&D INDEX
+# ============================================================
+
+def select_ed_index():
+
+    selected = st.session_state.get(
+        "ed_index_selector",
+        ""
+    )
+
+    if (
+        selected
+        and selected != "-- Select an index --"
+    ):
+
+        instance_id = uuid.uuid4().hex[:10]
+
+        instance = {
+
+            "id": instance_id,
+
+            "name": selected,
+
+            "text": "",
+
+            "documents": [],
+
+            "other_document": "",
+
+        }
+
+        st.session_state.ed_index_instances.append(
+            instance
+        )
+
+        # Reset selector.
+        # IMPORTANT:
+        # We DO NOT remove the selected index.
+        st.session_state.ed_index_selector = (
+            "-- Select an index --"
+        )
+
+
+# ============================================================
+# REMOVE ONE INDEX INSTANCE
+# ============================================================
+
+def remove_ed_instance(
+    instance_id
+):
+
+    st.session_state.ed_index_instances = [
+        instance
+        for instance
+        in st.session_state.ed_index_instances
+        if instance["id"] != instance_id
+    ]
+
+    keys_to_remove = [
+        f"ed_text_{instance_id}",
+        f"ed_voice_{instance_id}",
+        f"ed_state_{instance_id}",
+        f"ed_other_{instance_id}",
+    ]
+
+    for document in DOCUMENT_OPTIONS:
+
+        keys_to_remove.append(
+            f"ed_doc_{instance_id}_{document}"
+        )
+
+    committee_roles = [
+        "Convener of Inquiry",
+        "Member 1",
+        "Member 2",
+        "Departmental Representative",
+    ]
+
+    for role in committee_roles:
+
+        keys_to_remove.extend([
+            (
+                f"ed_committee_"
+                f"{instance_id}_"
+                f"{role}_erp"
+            ),
+            (
+                f"ed_committee_"
+                f"{instance_id}_"
+                f"{role}_name"
+            ),
+            (
+                f"ed_committee_"
+                f"{instance_id}_"
+                f"{role}_designation"
+            ),
+        ])
+
+    for key in keys_to_remove:
+
+        st.session_state.pop(
+            key,
+            None
+        )
+
+
+# ============================================================
+# RESET E&D INQUIRY
+# ============================================================
+
+def reset_inquiry():
+
+    st.session_state.ed_index_instances = []
+
+    st.session_state.ed_index_selector = (
+        "-- Select an index --"
+    )
+
+    st.session_state.generated_draft = ""
+
+    keys_to_remove = []
+
+    for key in list(
+        st.session_state.keys()
+    ):
+
+        if (
+            key.startswith("ed_text_")
+            or key.startswith("ed_voice_")
+            or key.startswith("ed_state_")
+            or key.startswith("ed_doc_")
+            or key.startswith("ed_other_")
+            or key.startswith("ed_committee_")
+        ):
+
+            keys_to_remove.append(
+                key
+            )
+
+    for key in keys_to_remove:
+
+        st.session_state.pop(
+            key,
+            None
+        )
+
+
+# ============================================================
+# BUILD SELECTED INDEX MANIFEST
+# ============================================================
+
+def build_selected_index_manifest():
+
+    instances = st.session_state.get(
+        "ed_index_instances",
+        []
+    )
+
+    if not instances:
+
+        return "(No E&D indexes selected.)"
+
+    manifest = []
+
+    for number, instance in enumerate(
+        instances,
+        start=1
+    ):
+
+        display_name = get_display_index_name(
+            instances,
+            instance
+        )
+
+        manifest.append(
+            f"{number}. {display_name}"
+        )
+
+    return "\n".join(
+        manifest
+    )
+
+
+# ============================================================
+# BUILD E&D INFORMATION
+# ============================================================
+
+def build_ed_information():
+
+    instances = st.session_state.get(
+        "ed_index_instances",
+        []
+    )
+
+    information_parts = []
+
+    for number, instance in enumerate(
+        instances,
+        start=1
+    ):
+
+        instance_id = instance[
+            "id"
+        ]
+
+        index_name = instance[
+            "name"
+        ]
+
+        display_name = get_display_index_name(
+            instances,
+            instance
+        )
+
+        # ----------------------------------------------------
+        # DOCUMENTS RECORDED
+        # ----------------------------------------------------
+
+        if index_name == "Documents Recorded":
+
+            selected_documents = []
+
+            for document in DOCUMENT_OPTIONS:
+
+                key = (
+                    f"ed_doc_"
+                    f"{instance_id}_"
+                    f"{document}"
+                )
+
+                if st.session_state.get(
+                    key,
+                    False
+                ):
+
+                    selected_documents.append(
+                        document
+                    )
+
+            other_document = st.session_state.get(
+                f"ed_other_{instance_id}",
+                ""
+            ).strip()
+
+            if other_document:
+
+                selected_documents.append(
+                    f"Other: {other_document}"
+                )
+
+            document_text = ", ".join(
+                selected_documents
+            )
+
+            information_parts.append(
+                f"INDEX INSTANCE {number}\n"
+                f"INDEX: {display_name}\n"
+                f"CONTENT:\n"
+                f"{document_text}"
+            )
+
+        # ----------------------------------------------------
+        # INQUIRY COMMITTEE
+        # ----------------------------------------------------
+
+        elif index_name == "Inquiry Committee":
+
+            roles = [
+                "Convener of Inquiry",
+                "Member 1",
+                "Member 2",
+                "Departmental Representative",
+            ]
+
+            committee_lines = []
+
+            for role in roles:
+
+                erp = st.session_state.get(
+                    (
+                        f"ed_committee_"
+                        f"{instance_id}_"
+                        f"{role}_erp"
+                    ),
+                    ""
+                ).strip()
+
+                name = st.session_state.get(
+                    (
+                        f"ed_committee_"
+                        f"{instance_id}_"
+                        f"{role}_name"
+                    ),
+                    ""
+                ).strip()
+
+                designation = st.session_state.get(
+                    (
+                        f"ed_committee_"
+                        f"{instance_id}_"
+                        f"{role}_designation"
+                    ),
+                    ""
+                ).strip()
+
+                committee_lines.append(
+                    f"{role}: "
+                    f"ERP#={erp}; "
+                    f"Name={name}; "
+                    f"Designation={designation}"
+                )
+
+            information_parts.append(
+                f"INDEX INSTANCE {number}\n"
+                f"INDEX: {display_name}\n"
+                f"CONTENT:\n"
+                + "\n".join(
+                    committee_lines
+                )
+            )
+
+        # ----------------------------------------------------
+        # NORMAL INDEX
+        # ----------------------------------------------------
+
+        else:
+
+            text = st.session_state.get(
+                f"ed_text_{instance_id}",
+                ""
+            ).strip()
+
+            information_parts.append(
+                f"INDEX INSTANCE {number}\n"
+                f"INDEX: {display_name}\n"
+                f"CONTENT:\n"
+                f"{text}"
+            )
+
+    return "\n\n".join(
+        information_parts
+    )
+
+
+# ============================================================
+# GET FIRST INDEX VALUE
+# ============================================================
+
+def get_first_index_value(
+    index_name
+):
+
+    instances = st.session_state.get(
+        "ed_index_instances",
+        []
+    )
+
+    for instance in instances:
+
+        if instance["name"] == index_name:
+
+            instance_id = instance[
+                "id"
+            ]
+
+            text = st.session_state.get(
+                f"ed_text_{instance_id}",
+                ""
+            )
+
+            if text.strip():
+
+                return text.strip()
+
+    return ""
+
+
+# ============================================================
+# LANGUAGE
+# ============================================================
+
+def language_instruction(
+    output_language
+):
+
+    if output_language == "Same as input":
+
+        return (
+            "Write the final document in the "
+            "same language used by the user."
+        )
+
+    return (
+        f"Write the final document in "
+        f"{output_language}."
+    )
+
+
+# ============================================================
+# PROMPT
 # ============================================================
 
 def build_prompt(
     document_type,
     inquiry_type,
+    output_language,
     tone,
     recipient,
     sender,
     subject,
     information,
-    output_language,
-    inquiry_date="",
+    selected_index_manifest=""
 ):
 
-    if output_language == "Same as input":
+    language_rule = language_instruction(
+        output_language
+    )
 
-        language_instruction = (
-            "Write the final document in the same "
-            "language used by the user's information. "
-            "If multiple languages are present, use "
-            "the dominant language unless context "
-            "clearly requires another language."
-        )
+    # ========================================================
+    # E&D
+    # ========================================================
 
-    else:
+    if (
+        document_type == "Inquiry"
+        and inquiry_type == "E&D Inquiry"
+    ):
 
-        language_instruction = (
-            "Write the entire final document in "
-            + output_language
-            + ". Translate and professionally adapt "
-              "the supplied information while preserving "
-              "its intended meaning."
-        )
+        return f"""
+You are an expert professional departmental
+inquiry document drafting specialist.
 
-    inquiry_instruction = ""
+Prepare an official E&D Inquiry Report based
+ONLY on the information supplied by the user.
 
-    if document_type == "Inquiry":
+============================================================
+ABSOLUTE INDEX CONTROL
+============================================================
 
-        if inquiry_type == "E&D Inquiry":
+The following list is the COMPLETE list of indexes
+selected by the user:
 
-            inquiry_instruction = f"""
-This is an official E&D (Efficiency &
-Discipline / departmental disciplinary)
-inquiry.
+{selected_index_manifest}
 
-The inquiry date assigned by the system is:
+THIS LIST IS AUTHORITATIVE.
 
-{inquiry_date}
+YOU MUST NOT ADD ANY INDEX THAT IS NOT IN THIS LIST.
 
-The system has already captured the
-Inquiry Reference No. and Date for the
-document header.
+Do NOT automatically add standard inquiry sections.
 
-Do not invent or change either value.
+Do NOT assume that a departmental inquiry must contain
+Witness Statements, Documentary Evidence, Findings,
+Conclusion, Recommendations, Defence, Committee,
+Documents Recorded, or any other section unless that
+index appears in the selected list above.
 
-The user has supplied information through
-specific inquiry indexes.
+If an index is NOT in the selected list:
 
-Treat the indexes as structured components
-of the inquiry report.
+- Do not create its heading.
+- Do not create its section.
+- Do not mention it.
+- Do not say it was not provided.
+- Do not say it was not recorded.
+- Do not write a remark about it.
+- Do not create a placeholder for it.
 
-The normal E&D structure may include:
+For example, if the user did NOT select:
 
-1. Inquiry Reference No.
-2. Subject
-3. Brief of the Inquiry
-4. Articles of Charge / Allegations
-5. Statement of the Accused
-6. Questions / Answers with the Accused
-7. Statements of Witnesses / Officials
-8. Documentary Evidence / Record Examined
-9. Defence / Written Explanation
-10. Findings
-11. Findings on Each Charge
-12. Discussion / Analysis
-13. Conclusion
-14. Recommendations
-15. Documents Recorded
-16. Inquiry Committee
+Statements of Witnesses / Officials
 
-IMPORTANT:
+then you MUST NOT write:
 
-The Statement of the Accused may contain
-multiple accused persons.
+"No witness statement was recorded."
 
-Each accused person's statement must be
-kept separately.
+You must completely omit that index.
 
-Do NOT merge the statements of different
-accused persons.
+============================================================
+REPEATED INDEXES
+============================================================
 
-Do NOT attribute one accused person's
-statement to another accused person.
+The user may select an index more than once.
 
-Preserve labels such as:
+The system automatically numbers certain repeated indexes.
 
-Accused No. 1
-Accused No. 2
-Accused No. 3
+For example, if the selected list contains:
 
-and so on.
+Statement of the Accused
 
-Preserve the supplied index identity.
+only once, use exactly:
 
-Do not unnecessarily merge separate indexes.
+Statement of the Accused
 
-Use formal departmental inquiry language.
+If it appears twice, use:
 
-Findings must be based only on supplied
-facts, statements and evidence.
+Statement of the Accused No. 1
+Statement of the Accused No. 2
 
-Do not invent facts, evidence, witnesses,
-dates, names, charges, admissions or findings.
+If it appears three times, use:
 
-Where information is insufficient, do not
-guess.
+Statement of the Accused No. 1
+Statement of the Accused No. 2
+Statement of the Accused No. 3
 
-The final document should read as a coherent
-professional E&D inquiry report while
-preserving the substance of the supplied
-information.
+The same rule applies to:
 
-The Documents Recorded section should present
-the selected documents clearly.
+Questions / Answers with the Accused
 
-The Inquiry Committee section should preserve
-the Convener, Member 1, Member 2 and
-Departmental Representative details.
+If selected twice:
 
-Do not fabricate committee information.
-"""
+Questions / Answers with the Accused No. 1
+Questions / Answers with the Accused No. 2
 
-        else:
+DO NOT invent another numbering scheme.
 
-            inquiry_instruction = """
-FFI Inquiry functionality is currently under
-construction.
+DO NOT use "Accused No. 1" as a separate index.
 
-Do not fabricate an FFI inquiry format.
-"""
+DO NOT create an "Add Accused" section.
 
-    prompt = f"""
-You are an expert professional writer,
-official correspondence specialist and
-departmental inquiry-document drafting
-assistant.
+============================================================
+ORDER
+============================================================
 
-Create a polished professional document.
+Preserve the exact order of the selected indexes.
 
-DOCUMENT TYPE:
-{document_type}
+============================================================
+HEADINGS
+============================================================
 
-INQUIRY TYPE:
-{inquiry_type}
+Use the supplied selected index names as headings.
 
-TONE:
+Do not rename indexes.
+
+Section headings must be bold and underlined.
+
+============================================================
+FACTUAL ACCURACY
+============================================================
+
+Use ONLY information supplied by the user.
+
+Do not invent:
+
+- names
+- ERP numbers
+- dates
+- allegations
+- statements
+- witnesses
+- evidence
+- findings
+- conclusions
+- recommendations
+- documents
+- events
+
+Do not fill gaps using assumptions.
+
+============================================================
+IMPORTANT
+============================================================
+
+The AI must NOT "complete" the inquiry report
+using a standard template.
+
+The user's selected indexes control the structure.
+
+Selected indexes = allowed sections.
+
+Unselected indexes = forbidden sections.
+
+============================================================
+LANGUAGE
+============================================================
+
+{language_rule}
+
+============================================================
+TONE
+============================================================
+
 {tone}
 
-RECIPIENT:
-{recipient}
+============================================================
+USER INFORMATION
+============================================================
 
-SENDER:
-{sender}
-
-SUBJECT:
-{subject}
-
-INQUIRY DATE:
-{inquiry_date}
-
-USER INFORMATION:
 {information}
 
-DESIRED OUTPUT LANGUAGE:
-{output_language}
+============================================================
+FINAL VALIDATION
+============================================================
 
-LANGUAGE INSTRUCTION:
-{language_instruction}
+Before returning the final report:
 
-{inquiry_instruction}
+1. Compare every heading against the selected index list.
+2. Remove every unselected section.
+3. Do not add remarks about unselected sections.
+4. Preserve repeated numbered indexes.
+5. Preserve the selected order.
+6. Do not invent facts.
 
-GENERAL REQUIREMENTS:
+Return only the professional E&D Inquiry Report.
+""".strip()
 
-1. Preserve the user's intended meaning.
+    # ========================================================
+    # FFI
+    # ========================================================
 
-2. Correct grammar, spelling and obvious
-speech-recognition errors.
+    if (
+        document_type == "Inquiry"
+        and inquiry_type == "FFI Inquiry"
+    ):
 
-3. Do not invent important facts.
+        return f"""
+Prepare a professional FFI Inquiry document.
 
-4. Do not fabricate names, dates, evidence,
-statements, allegations or findings.
+{language_rule}
 
-5. Organize information logically.
+Tone:
 
-6. Use professional official language.
+{tone}
 
-7. Make the document ready for practical use.
+Information supplied by the user:
 
-8. Keep useful placeholders where appropriate.
+{information}
 
-9. For Email, use an appropriate email structure.
+Do not invent facts or information.
+""".strip()
 
-10. For Letter, use an appropriate official
-letter structure.
+    # ========================================================
+    # EMAIL / LETTER
+    # ========================================================
 
-11. For E&D Inquiry, preserve the supplied
-inquiry indexes and their meaning.
+    prompt = f"""
+You are an expert professional document writer.
 
-12. For E&D Inquiry, use appropriate headings
-and subheadings.
+Create a high-quality {document_type}.
 
-13. Do not unnecessarily remove information
-provided by the user.
+{language_rule}
 
-14. Do not add explanations before or after
-the document.
+Tone:
+{tone}
 
-15. Return only the finished document.
+Recipient:
+{recipient}
 
-16. Do not use markdown code blocks.
+Sender:
+{sender}
 
-17. Never create unsupported facts.
+Subject:
+{subject}
 
-18. If the user's information is incomplete,
-do not guess.
+Information supplied by the user:
 
-19. Do not turn missing information into
-fictional information.
+{information}
 
-20. Maintain a formal, objective and
-professionally neutral inquiry style.
+Requirements:
+
+- Preserve the facts supplied by the user.
+- Do not invent important facts.
+- Correct grammar and spelling.
+- Use professional language.
+- Make the document clear and logically organized.
+- Do not add unnecessary information.
+"""
+
+    if document_type == "Email":
+
+        prompt += """
+For an email:
+
+- Include an appropriate subject.
+- Use an appropriate salutation.
+- Write a professional body.
+- Use an appropriate closing.
+"""
+
+    elif document_type == "Letter":
+
+        prompt += """
+For a letter:
+
+- Use a formal letter structure.
+- Include an appropriate subject.
+- Use appropriate salutation.
+- Use an appropriate closing.
 """
 
     return prompt.strip()
@@ -804,14 +1239,13 @@ professionally neutral inquiry style.
 
 def call_groq(
     api_key,
-    prompt,
+    prompt
 ):
 
     if not api_key:
 
         raise ValueError(
-            "GROQ_API_KEY is not configured "
-            "in Streamlit Secrets."
+            "Groq API key is not configured."
         )
 
     try:
@@ -822,27 +1256,23 @@ def call_groq(
             api_key=api_key
         )
 
-        response = (
-            client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an expert "
-                            "professional writer "
-                            "and official inquiry "
-                            "document drafting "
-                            "specialist."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                temperature=0.4,
-            )
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert professional "
+                        "writer and official departmental "
+                        "inquiry document drafting specialist."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            temperature=0.4,
         )
 
         return (
@@ -856,9 +1286,8 @@ def call_groq(
     except Exception as e:
 
         raise RuntimeError(
-            "Groq API error: "
-            + str(e)
-        ) from e
+            f"Groq request failed: {e}"
+        )
 
 
 # ============================================================
@@ -867,19 +1296,20 @@ def call_groq(
 
 def call_gemini(
     api_key,
-    prompt,
+    prompt
 ):
 
     if not api_key:
 
         raise ValueError(
-            "GEMINI_API_KEY is not configured "
-            "in Streamlit Secrets."
+            "Gemini API key is not configured."
         )
 
-    headers = {
-        "Content-Type": "application/json"
-    }
+    url = (
+        GEMINI_URL
+        + "?key="
+        + api_key
+    )
 
     payload = {
         "contents": [
@@ -893,39 +1323,27 @@ def call_gemini(
         ]
     }
 
-    url = (
-        GEMINI_URL
-        + "?key="
-        + api_key
-    )
-
     try:
 
         response = requests.post(
             url,
-            headers=headers,
             json=payload,
-            timeout=60,
+            timeout=60
         )
 
-        if response.status_code != 200:
-
-            raise RuntimeError(
-                "Gemini API error: "
-                + response.text
-            )
+        response.raise_for_status()
 
         data = response.json()
 
         candidates = data.get(
             "candidates",
-            [],
+            []
         )
 
         if not candidates:
 
             raise RuntimeError(
-                "Gemini returned no response."
+                "Gemini returned no candidates."
             )
 
         parts = (
@@ -937,175 +1355,141 @@ def call_gemini(
         if not parts:
 
             raise RuntimeError(
-                "Gemini returned an empty response."
+                "Gemini returned no text."
             )
 
-        return (
-            parts[0]
-            .get("text", "")
-            .strip()
-        )
+        return parts[0].get(
+            "text",
+            ""
+        ).strip()
 
     except requests.RequestException as e:
 
         raise RuntimeError(
-            "Gemini connection error: "
-            + str(e)
-        ) from e
+            f"Gemini request failed: {e}"
+        )
 
 
 # ============================================================
 # E&D HEADER
 # ============================================================
 
-def create_inquiry_header(
-    reference_number,
-    inquiry_date,
-):
-
-    reference_number = (
-        reference_number.strip()
-        if reference_number
-        else "Not Provided"
-    )
-
-    return (
-        "DEPARTMENTAL INQUIRY REPORT\n\n"
-        "Inquiry Reference No.: "
-        + reference_number
-        + "\n"
-        "Date: "
-        + inquiry_date
-        + "\n\n"
-    )
-
-
 def add_inquiry_header(
     draft,
-    reference_number,
-    inquiry_date,
+    reference_number
 ):
 
-    header = create_inquiry_header(
-        reference_number,
-        inquiry_date,
+    date_text = datetime.now().strftime(
+        "%d %B %Y"
     )
 
-    # Prevent accidental duplicate header
-    # if AI happens to generate one.
-    cleaned = draft.strip()
+    lines = draft.splitlines()
 
-    lines = cleaned.splitlines()
-
-    filtered_lines = []
-
-    skip_next = False
+    cleaned_lines = []
 
     for line in lines:
 
-        lower_line = line.lower().strip()
+        stripped = line.strip()
 
-        if lower_line in [
-            "departmental inquiry report",
-            "inquiry reference no.",
-            "date:",
-        ]:
+        lower = stripped.lower()
 
-            continue
-
-        if (
-            lower_line.startswith(
-                "inquiry reference no:"
-            )
-            or lower_line.startswith(
-                "inquiry reference no.:"
-            )
+        if lower.startswith(
+            "inquiry reference no:"
         ):
 
             continue
 
-        if lower_line.startswith(
+        if lower.startswith(
             "date:"
         ):
 
             continue
 
-        filtered_lines.append(line)
+        cleaned_lines.append(
+            line
+        )
 
-    cleaned = "\n".join(
-        filtered_lines
+    body = "\n".join(
+        cleaned_lines
     ).strip()
 
-    return header + cleaned
+    header = (
+        "DEPARTMENTAL INQUIRY REPORT\n\n"
+        f"Inquiry Reference No.: "
+        f"{reference_number}\n"
+        f"Date: {date_text}\n\n"
+    )
+
+    return (
+        header
+        + body
+    )
 
 
 # ============================================================
 # PDF
 # ============================================================
 
-def clean_pdf_text(text):
+def clean_pdf_text(
+    text
+):
 
     replacements = {
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2026": "...",
-        "\u00a0": " ",
-        "\u2022": "-",
-        "\u2192": "->",
-        "\u2011": "-",
+        "–": "-",
+        "—": "-",
+        "’": "'",
+        "‘": "'",
+        "“": '"',
+        "”": '"',
+        "•": "-",
+        "…": "...",
+        "→": "->",
     }
 
     for old, new in replacements.items():
 
         text = text.replace(
             old,
-            new,
+            new
         )
 
     return (
-        text.encode(
+        text
+        .encode(
             "latin-1",
-            "replace",
+            "ignore"
         )
-        .decode("latin-1")
+        .decode(
+            "latin-1"
+        )
     )
 
 
 def wrap_pdf_line(
     pdf,
     text,
-    max_width,
+    max_width=180
 ):
 
-    if not text:
-
-        return [""]
-
-    words = text.split(" ")
+    words = text.split()
 
     lines = []
+
     current = ""
 
     for word in words:
 
-        test_line = (
+        test = (
             word
             if not current
             else current + " " + word
         )
 
-        if (
-            pdf.get_string_width(
-                test_line
-            )
-            <= max_width
-        ):
+        if pdf.get_string_width(
+            test
+        ) <= max_width:
 
-            current = test_line
+            current = test
 
         else:
 
@@ -1126,37 +1510,31 @@ def wrap_pdf_line(
     return lines
 
 
-def export_pdf(text):
+def export_pdf(
+    text
+):
 
     pdf = FPDF()
 
     pdf.set_auto_page_break(
         auto=True,
-        margin=15,
+        margin=15
     )
 
     pdf.add_page()
 
     pdf.set_font(
         "Arial",
-        size=11,
+        size=11
     )
 
-    usable_width = (
-        pdf.w
-        - pdf.l_margin
-        - pdf.r_margin
-    )
-
-    cleaned_text = clean_pdf_text(
+    text = clean_pdf_text(
         text
     )
 
-    for paragraph in cleaned_text.split(
-        "\n"
-    ):
+    for paragraph in text.split("\n"):
 
-        if paragraph.strip() == "":
+        if not paragraph.strip():
 
             pdf.ln(5)
 
@@ -1164,18 +1542,15 @@ def export_pdf(text):
 
         lines = wrap_pdf_line(
             pdf,
-            paragraph,
-            usable_width,
+            paragraph
         )
 
         for line in lines:
 
             pdf.multi_cell(
-                usable_width,
+                0,
                 7,
-                line,
-                new_x="LMARGIN",
-                new_y="NEXT",
+                line
             )
 
     return bytes(
@@ -1187,39 +1562,56 @@ def export_pdf(text):
 # DOCX
 # ============================================================
 
-def export_docx(text):
+def export_docx(
+    text
+):
 
     document = Document()
 
     section = document.sections[0]
 
-    section.top_margin = Inches(0.75)
-    section.bottom_margin = Inches(0.75)
-    section.left_margin = Inches(0.8)
-    section.right_margin = Inches(0.8)
-
-    for paragraph in text.split("\n"):
-
-        document.add_paragraph(
-            paragraph
-        )
-
-    buffer = io.BytesIO()
-
-    document.save(
-        buffer
+    section.top_margin = Inches(
+        0.7
     )
 
-    buffer.seek(0)
+    section.bottom_margin = Inches(
+        0.7
+    )
 
-    return buffer.getvalue()
+    section.left_margin = Inches(
+        0.8
+    )
+
+    section.right_margin = Inches(
+        0.8
+    )
+
+    for line in text.splitlines():
+
+        paragraph = document.add_paragraph(
+            line
+        )
+
+        paragraph.paragraph_format.space_after = (
+            Inches(0.05)
+        )
+
+    output = io.BytesIO()
+
+    document.save(
+        output
+    )
+
+    return output.getvalue()
 
 
 # ============================================================
 # TXT
 # ============================================================
 
-def export_txt(text):
+def export_txt(
+    text
+):
 
     return text.encode(
         "utf-8"
@@ -1230,261 +1622,72 @@ def export_txt(text):
 # PNG
 # ============================================================
 
-def export_png(text):
+def export_png(
+    text
+):
 
     try:
 
+        font_path = (
+            "/usr/share/fonts/truetype/"
+            "dejavu/DejaVuSans.ttf"
+        )
+
         font = ImageFont.truetype(
-            "DejaVuSans.ttf",
-            24,
+            font_path,
+            24
         )
 
     except Exception:
 
         font = ImageFont.load_default()
 
-    margin = 50
-    max_width = 1100
-    line_height = 48
+    lines = text.splitlines()
 
-    dummy = Image.new(
-        "RGB",
-        (
-            max_width,
-            100,
-        ),
-        "white",
-    )
+    if not lines:
 
-    draw = ImageDraw.Draw(
-        dummy
-    )
+        lines = [""]
 
-    lines = []
+    width = 1600
 
-    for paragraph in text.split("\n"):
-
-        if paragraph == "":
-
-            lines.append("")
-
-            continue
-
-        words = paragraph.split(" ")
-
-        current = ""
-
-        for word in words:
-
-            test_line = (
-                word
-                if not current
-                else current + " " + word
-            )
-
-            bbox = draw.textbbox(
-                (0, 0),
-                test_line,
-                font=font,
-            )
-
-            width = (
-                bbox[2]
-                - bbox[0]
-            )
-
-            if width <= (
-                max_width
-                - margin * 2
-            ):
-
-                current = test_line
-
-            else:
-
-                if current:
-
-                    lines.append(
-                        current
-                    )
-
-                current = word
-
-        if current:
-
-            lines.append(
-                current
-            )
-
-        lines.append("")
+    line_height = 38
 
     height = max(
-        200,
-        margin * 2
-        + len(lines)
-        * line_height,
+        400,
+        len(lines) * line_height + 80
     )
 
     image = Image.new(
         "RGB",
-        (
-            max_width,
-            height,
-        ),
-        "white",
+        (width, height),
+        "white"
     )
 
     draw = ImageDraw.Draw(
         image
     )
 
-    y = margin
+    y = 30
 
     for line in lines:
 
         draw.text(
-            (
-                margin,
-                y,
-            ),
+            (30, y),
             line,
             fill="black",
-            font=font,
+            font=font
         )
 
         y += line_height
 
-    buffer = io.BytesIO()
+    output = io.BytesIO()
 
     image.save(
-        buffer,
-        format="PNG",
+        output,
+        format="PNG"
     )
 
-    buffer.seek(0)
-
-    return buffer.getvalue()
-
-
-# ============================================================
-# E&D CALLBACKS
-# ============================================================
-
-def select_ed_index():
-
-    selected = st.session_state.get(
-        "ed_index_selector",
-        "",
-    )
-
-    if (
-        selected
-        and selected != "-- Select an index --"
-    ):
-
-        if selected not in st.session_state.ed_selected_indexes:
-
-            st.session_state.ed_selected_indexes.append(
-                selected
-            )
-
-        # Reset selector safely inside callback.
-        st.session_state.ed_index_selector = (
-            "-- Select an index --"
-        )
-
-
-def remove_ed_index(index_name):
-
-    if index_name in st.session_state.ed_selected_indexes:
-
-        st.session_state.ed_selected_indexes.remove(
-            index_name
-        )
-
-    # Remove stored text state.
-    st.session_state.ed_index_values.pop(
-        index_name,
-        None,
-    )
-
-    st.session_state.pop(
-        "ed_text_" + index_name,
-        None,
-    )
-
-    st.session_state.pop(
-        "ed_state_" + index_name,
-        None,
-    )
-
-    st.session_state.pop(
-        "ed_voice_" + index_name,
-        None,
-    )
-
-
-def add_accused():
-
-    number = (
-        len(
-            st.session_state.ed_accused_statements
-        )
-        + 1
-    )
-
-    st.session_state.ed_accused_statements.append(
-        {
-            "number": number,
-            "text": "",
-        }
-    )
-
-
-def remove_accused(
-    accused_number
-):
-
-    st.session_state.ed_accused_statements = [
-        item
-        for item in st.session_state.ed_accused_statements
-        if item["number"] != accused_number
-    ]
-
-    st.session_state.pop(
-        f"ed_accused_text_{accused_number}",
-        None,
-    )
-
-    st.session_state.pop(
-        f"ed_accused_state_{accused_number}",
-        None,
-    )
-
-    st.session_state.pop(
-        f"ed_accused_voice_{accused_number}",
-        None,
-    )
-
-
-def reset_inquiry():
-
-    st.session_state.ed_selected_indexes = []
-    st.session_state.ed_index_values = {}
-
-    st.session_state.ed_accused_statements = []
-
-    st.session_state.ed_documents = []
-    st.session_state.ed_other_document = ""
-
-    st.session_state.ed_committee = {
-        "Convener of Inquiry": "",
-        "Member 1": "",
-        "Member 2": "",
-        "Departmental Representative": "",
-    }
-
-    st.session_state.ed_inquiry_date = ""
+    return output.getvalue()
 
 
 # ============================================================
@@ -1497,82 +1700,52 @@ with st.sidebar:
         "📝 DraftForge"
     )
 
-    st.caption(
-        "AI Document Composer"
-    )
-
-    st.divider()
-
-    st.subheader(
-        "⚙️ AI Provider"
+    st.markdown(
+        "### AI Document Composer"
     )
 
     provider = st.selectbox(
-        "Choose AI provider",
-        [
-            "Groq",
-            "Google Gemini",
-        ],
+        "AI Provider",
+        ["Groq", "Gemini"],
+        key="provider"
     )
 
-    api_key = get_api_key(
-        provider
+    output_language = st.selectbox(
+        "Output Language",
+        OUTPUT_LANGUAGES
     )
 
-    if api_key:
-
-        st.success(
-            "🔐 API key loaded securely."
-        )
-
-    else:
-
-        if provider == "Groq":
-
-            st.warning(
-                "GROQ_API_KEY not found "
-                "in Streamlit Secrets."
-            )
-
-        else:
-
-            st.warning(
-                "GEMINI_API_KEY not found "
-                "in Streamlit Secrets."
-            )
-
-    st.divider()
-
-    st.subheader(
-        "👤 Profile"
-    )
-
-    profile_name = st.text_input(
-        "Your name",
-        value="Raees Khan",
+    tone = st.selectbox(
+        "Tone",
+        TONES
     )
 
     st.divider()
 
     st.subheader(
-        "📚 Draft History"
+        "Draft History"
     )
 
     history = get_history()
 
-    if history:
+    if not history:
 
         st.caption(
-            str(len(history))
-            + " saved draft(s)"
+            "No saved drafts yet."
         )
 
-        for row in history[:10]:
+    else:
+
+        for row in history[:15]:
 
             draft_id = row[0]
+
             document_type_history = row[1]
+
             inquiry_type_history = row[2]
+
             subject_history = row[6]
+
             created_at = row[9]
 
             title = (
@@ -1582,1045 +1755,673 @@ with st.sidebar:
             )
 
             with st.expander(
-                f"{title} - {created_at}"
+                f"{title} — {created_at}"
             ):
 
-                st.write(
-                    "**Type:** "
-                    + str(
-                        document_type_history
-                    )
+                st.caption(
+                    f"ID: {draft_id}"
                 )
 
                 if inquiry_type_history:
 
-                    st.write(
-                        "**Inquiry:** "
-                        + str(
-                            inquiry_type_history
-                        )
+                    st.caption(
+                        inquiry_type_history
                     )
 
-                if subject_history:
-
-                    st.write(
-                        "**Subject:** "
-                        + str(
-                            subject_history
-                        )
-                    )
-
-                if st.button(
-                    "Load Draft",
-                    key=f"load_{draft_id}",
-                    use_container_width=True,
-                ):
-
-                    st.session_state.generated_draft = (
-                        row[8] or ""
-                    )
-
-                    st.rerun()
+                st.text_area(
+                    "Draft",
+                    row[8],
+                    height=180,
+                    key=f"history_{draft_id}"
+                )
 
 
 # ============================================================
-# MAIN HEADER
+# MAIN APPLICATION
 # ============================================================
 
 st.title(
     "📝 DraftForge — AI Document Composer"
 )
 
-st.write(
+st.caption(
     "Create professional emails, letters and "
-    "inquiries using natural-language text or "
-    "multilingual voice input."
+    "departmental inquiry documents using text "
+    "or voice input."
 )
-
-st.divider()
 
 
 # ============================================================
 # DOCUMENT TYPE
 # ============================================================
 
-st.subheader(
-    "📄 Document Settings"
-)
-
 document_type = st.selectbox(
     "Document Type",
-    DOCUMENT_TYPES,
+    DOCUMENT_TYPES
 )
 
 
 # ============================================================
-# INQUIRY TYPE
+# EMAIL
 # ============================================================
 
-inquiry_type = ""
+if document_type == "Email":
 
-if document_type == "Inquiry":
-
-    inquiry_type = st.selectbox(
-        "🔎 Inquiry Type",
-        INQUIRY_TYPES,
+    st.subheader(
+        "Email Details"
     )
 
-    if inquiry_type == "FFI Inquiry":
+    recipient = st.text_input(
+        "Recipient",
+        key="email_recipient"
+    )
 
-        st.warning(
-            "🚧 FFI Inquiry Module — Under Construction"
-        )
-
-        st.info(
-            "The FFI inquiry format and indexes "
-            "are currently under process. "
-            "Please use E&D Inquiry for the "
-            "currently available inquiry workflow."
-        )
-
-    else:
-
-        st.success(
-            "✅ E&D Inquiry Module"
-        )
-
-        st.caption(
-            "Select the required inquiry indexes "
-            "from the dropdown below. Each selected "
-            "index accepts natural-language typing "
-            "and voice input."
-        )
-
-
-# ============================================================
-# GENERAL SETTINGS
-# ============================================================
-
-tone = st.selectbox(
-    "🎯 Tone",
-    TONES,
-)
-
-
-# ============================================================
-# RECIPIENT / SENDER / SUBJECT
-# ============================================================
-
-if (
-    document_type == "Inquiry"
-    and inquiry_type == "E&D Inquiry"
-):
-
-    recipient = ""
-    sender = profile_name
-    subject = ""
-
-else:
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        recipient = st.text_input(
-            "👤 Recipient",
-            placeholder=(
-                "e.g. Manager / Director / Officer"
-            ),
-        )
-
-    with col2:
-
-        sender = st.text_input(
-            "✍️ Sender",
-            value=profile_name,
-        )
+    sender = st.text_input(
+        "Sender",
+        key="email_sender"
+    )
 
     subject = st.text_input(
-        "📌 Subject",
-        placeholder="Enter subject",
+        "Subject",
+        key="email_subject"
     )
-
-
-# ============================================================
-# OUTPUT LANGUAGE
-# ============================================================
-
-output_language = st.selectbox(
-    "🌐 Desired Output Language",
-    OUTPUT_LANGUAGES,
-)
-
-
-# ============================================================
-# STATUS MESSAGES
-# ============================================================
-
-if "voice_error" in st.session_state:
-
-    st.error(
-        st.session_state.voice_error
-    )
-
-    del st.session_state.voice_error
-
-
-if "voice_success" in st.session_state:
-
-    st.success(
-        st.session_state.voice_success
-    )
-
-    del st.session_state.voice_success
-
-
-# ============================================================
-# NORMAL INFORMATION BOX
-# ============================================================
-
-def normal_information_box():
 
     st.markdown(
-        "### 📝 Information"
+        "**Information / Instructions**"
     )
-
-    st.caption(
-        "Type naturally or use the microphone. "
-        "Voice transcription is inserted directly "
-        "into the same text box."
-    )
-
-    text_widget_key = (
-        "normal_information_editor"
-    )
-
-    if text_widget_key not in st.session_state:
-
-        st.session_state[
-            text_widget_key
-        ] = st.session_state.get(
-            "normal_information",
-            "",
-        )
 
     st.text_area(
-        "Type or edit your information",
-        height=250,
-        key=text_widget_key,
-        placeholder=(
-            "Type your request here..."
-        ),
-    )
-
-    st.session_state.normal_information = (
-        st.session_state.get(
-            text_widget_key,
-            "",
-        )
-    )
-
-    st.markdown(
-        "#### 🎙️ Voice Input"
+        "Type your information",
+        height=220,
+        key="normal_information",
+        label_visibility="collapsed"
     )
 
     st.audio_input(
-        "Record your voice",
-        sample_rate=16000,
-        key="normal_voice_recorder",
+        "🎙️ Record Voice",
+        key="normal_voice"
     )
 
     st.button(
-        "🎙️ Add Voice to Text Box",
-        key="normal_transcribe_button",
-        use_container_width=True,
-        on_click=add_normal_voice,
+        "➕ Add Voice to Text Box",
+        on_click=add_normal_voice
     )
 
-    return st.session_state.get(
-        text_widget_key,
-        "",
-    )
+    if st.session_state.normal_voice_status:
+
+        st.info(
+            st.session_state.normal_voice_status
+        )
 
 
 # ============================================================
-# E&D DOCUMENTS RECORDED
+# LETTER
 # ============================================================
 
-def render_documents_recorded():
+elif document_type == "Letter":
+
+    st.subheader(
+        "Letter Details"
+    )
+
+    recipient = st.text_input(
+        "Recipient",
+        key="letter_recipient"
+    )
+
+    sender = st.text_input(
+        "Sender",
+        key="letter_sender"
+    )
+
+    subject = st.text_input(
+        "Subject",
+        key="letter_subject"
+    )
 
     st.markdown(
-        "### 📂 Documents Recorded"
+        "**Information / Instructions**"
     )
 
-    st.caption(
-        "Select the documents that were available "
-        "or examined during the inquiry."
+    st.text_area(
+        "Type your information",
+        height=220,
+        key="normal_information",
+        label_visibility="collapsed"
     )
 
-    documents = [
-        "CNICF",
-        "BC",
-        "Marriage Certificate",
-        "CNICs",
-        "Domicile",
-        "Affidavit",
-        "Complaint / Application",
-        "Written Explanation",
-        "Official Record",
-        "Other",
-    ]
-
-    selected_documents = []
-
-    columns = st.columns(2)
-
-    for number, document in enumerate(
-        documents
-    ):
-
-        with columns[number % 2]:
-
-            checked = st.checkbox(
-                document,
-                key=(
-                    "ed_document_"
-                    + str(number)
-                ),
-            )
-
-            if checked:
-
-                selected_documents.append(
-                    document
-                )
-
-    if "Other" in selected_documents:
-
-        st.text_input(
-            "Specify other document",
-            key="ed_other_document",
-            placeholder="Enter document name",
-        )
-
-        if st.session_state.ed_other_document.strip():
-
-            selected_documents.append(
-                "Other: "
-                + st.session_state.ed_other_document.strip()
-            )
-
-    st.session_state.ed_documents = (
-        selected_documents
-    )
-
-    return selected_documents
-
-
-# ============================================================
-# E&D INQUIRY COMMITTEE
-# ============================================================
-
-def render_inquiry_committee():
-
-    st.markdown(
-        "### 👥 Inquiry Committee"
-    )
-
-    st.caption(
-        "Enter ERP#, Name and Designation for "
-        "each committee member."
-    )
-
-    committee_fields = [
-        "Convener of Inquiry",
-        "Member 1",
-        "Member 2",
-        "Departmental Representative",
-    ]
-
-    for field in committee_fields:
-
-        st.markdown(
-            f"**{field}**"
-        )
-
-        value = st.text_input(
-            f"{field} details",
-            key=(
-                "ed_committee_"
-                + field
-                .lower()
-                .replace(" ", "_")
-            ),
-            placeholder=(
-                "ERP# | Name | Designation"
-            ),
-        )
-
-        st.session_state.ed_committee[
-            field
-        ] = value
-
-
-# ============================================================
-# MULTIPLE ACCUSED STATEMENTS
-# ============================================================
-
-def render_accused_statements():
-
-    st.markdown(
-        "### 👤 Statements of Accused Persons"
-    )
-
-    st.caption(
-        "Add each accused person separately. "
-        "Each accused can provide information by "
-        "typing or using voice input."
-    )
-
-    # --------------------------------------------------------
-    # If none exists, create the first accused.
-    # --------------------------------------------------------
-
-    if not st.session_state.ed_accused_statements:
-
-        st.button(
-            "➕ Add Accused No. 1",
-            key="add_first_accused",
-            on_click=add_accused,
-            use_container_width=True,
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # Render each accused.
-    # --------------------------------------------------------
-
-    for accused in list(
-        st.session_state.ed_accused_statements
-    ):
-
-        number = accused["number"]
-
-        text_key = (
-            f"ed_accused_text_{number}"
-        )
-
-        state_key = (
-            f"ed_accused_state_{number}"
-        )
-
-        voice_key = (
-            f"ed_accused_voice_{number}"
-        )
-
-        button_key = (
-            f"ed_accused_transcribe_{number}"
-        )
-
-        if text_key not in st.session_state:
-
-            st.session_state[text_key] = (
-                accused.get(
-                    "text",
-                    "",
-                )
-            )
-
-        # ----------------------------------------------------
-        # IMPORTANT:
-        # Heading is bold + underlined.
-        # ----------------------------------------------------
-
-        st.markdown(
-            f"**<u>Accused No. {number}</u>**",
-            unsafe_allow_html=True,
-        )
-
-        # ----------------------------------------------------
-        # Text area
-        # ----------------------------------------------------
-
-        st.text_area(
-            "Type or edit statement",
-            height=200,
-            key=text_key,
-            placeholder=(
-                f"Enter the statement / defence "
-                f"of Accused No. {number}..."
-            ),
-        )
-
-        current_value = st.session_state.get(
-            text_key,
-            "",
-        )
-
-        accused["text"] = current_value
-
-        # ----------------------------------------------------
-        # Voice
-        # ----------------------------------------------------
-
-        st.audio_input(
-            "🎙️ Record voice for this accused",
-            sample_rate=16000,
-            key=voice_key,
-        )
-
-        st.button(
-            "🎙️ Add Voice to This Statement",
-            key=button_key,
-            use_container_width=True,
-            on_click=add_accused_voice,
-            args=(number,),
-        )
-
-        st.button(
-            "🗑️ Remove this accused",
-            key=f"remove_accused_{number}",
-            on_click=remove_accused,
-            args=(number,),
-        )
-
-        st.divider()
-
-    # --------------------------------------------------------
-    # Add another accused.
-    # --------------------------------------------------------
-
-    next_number = (
-        len(
-            st.session_state.ed_accused_statements
-        )
-        + 1
+    st.audio_input(
+        "🎙️ Record Voice",
+        key="normal_voice"
     )
 
     st.button(
-        f"➕ Add Accused No. {next_number}",
-        key="add_another_accused",
-        on_click=add_accused,
-        use_container_width=True,
+        "➕ Add Voice to Text Box",
+        on_click=add_normal_voice
     )
+
+    if st.session_state.normal_voice_status:
+
+        st.info(
+            st.session_state.normal_voice_status
+        )
 
 
 # ============================================================
-# E&D INQUIRY INPUT
+# INQUIRY
 # ============================================================
-
-def inquiry_information_boxes():
-
-    st.markdown(
-        "### 📑 E&D Inquiry Indexes"
-    )
-
-    st.caption(
-        "Select an index from the dropdown. "
-        "Once selected, it will no longer appear "
-        "in the dropdown."
-    )
-
-    selected_indexes = (
-        st.session_state.ed_selected_indexes
-    )
-
-    available_indexes = [
-        index
-        for index in ED_INDEXES
-        if index not in selected_indexes
-    ]
-
-    selector_options = [
-        "-- Select an index --"
-    ] + available_indexes
-
-    st.selectbox(
-        "➕ Select Inquiry Index",
-        selector_options,
-        key="ed_index_selector",
-        on_change=select_ed_index,
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # RENDER SELECTED INDEXES
-    # --------------------------------------------------------
-
-    for position, index_name in enumerate(
-        list(selected_indexes)
-    ):
-
-        safe_name = (
-            index_name
-            .lower()
-            .replace(" ", "_")
-            .replace("/", "_")
-            .replace("#", "no")
-            .replace("&", "and")
-            .replace("(", "")
-            .replace(")", "")
-            .replace("-", "_")
-        )
-
-        text_widget_key = (
-            "ed_text_"
-            + index_name
-        )
-
-        state_storage_key = (
-            "ed_state_"
-            + index_name
-        )
-
-        voice_key = (
-            "ed_voice_"
-            + index_name
-        )
-
-        transcribe_key = (
-            "ed_transcribe_"
-            + safe_name
-        )
-
-        if state_storage_key not in st.session_state:
-
-            st.session_state[
-                state_storage_key
-            ] = st.session_state.ed_index_values.get(
-                index_name,
-                "",
-            )
-
-        if text_widget_key not in st.session_state:
-
-            st.session_state[
-                text_widget_key
-            ] = st.session_state.get(
-                state_storage_key,
-                "",
-            )
-
-        # ----------------------------------------------------
-        # INDEX HEADING
-        # Bold + underlined
-        # ----------------------------------------------------
-
-        st.markdown(
-            f"**<u>{index_name}</u>**",
-            unsafe_allow_html=True,
-        )
-
-        # ----------------------------------------------------
-        # SPECIAL INDEX:
-        # STATEMENT OF ACCUSED
-        # ----------------------------------------------------
-
-        if index_name == "Statement of the Accused":
-
-            render_accused_statements()
-
-        # ----------------------------------------------------
-        # SPECIAL INDEX:
-        # DOCUMENTS RECORDED
-        # ----------------------------------------------------
-
-        elif index_name == "Documents Recorded":
-
-            render_documents_recorded()
-
-        # ----------------------------------------------------
-        # SPECIAL INDEX:
-        # INQUIRY COMMITTEE
-        # ----------------------------------------------------
-
-        elif index_name == "Inquiry Committee":
-
-            render_inquiry_committee()
-
-        # ----------------------------------------------------
-        # NORMAL TEXT / VOICE INDEX
-        # ----------------------------------------------------
-
-        else:
-
-            st.text_area(
-                "Type or edit information",
-                height=180,
-                key=text_widget_key,
-                placeholder=(
-                    "Type information naturally "
-                    "for this index..."
-                ),
-            )
-
-            current_value = st.session_state.get(
-                text_widget_key,
-                "",
-            )
-
-            st.session_state[
-                state_storage_key
-            ] = current_value
-
-            st.session_state.ed_index_values[
-                index_name
-            ] = current_value
-
-            st.audio_input(
-                "🎙️ Record voice for this index",
-                sample_rate=16000,
-                key=voice_key,
-            )
-
-            st.button(
-                "🎙️ Add Voice to This Index",
-                key=transcribe_key,
-                use_container_width=True,
-                on_click=add_inquiry_voice,
-                args=(index_name,),
-            )
-
-        st.button(
-            "🗑️ Remove this index",
-            key=(
-                "remove_ed_"
-                + safe_name
-            ),
-            on_click=remove_ed_index,
-            args=(index_name,),
-        )
-
-        st.divider()
-
-    if selected_indexes:
-
-        st.caption(
-            "Selected indexes: "
-            + str(len(selected_indexes))
-            + " / "
-            + str(len(ED_INDEXES))
-        )
-
-        st.button(
-            "↻ Reset E&D Inquiry Indexes",
-            use_container_width=True,
-            on_click=reset_inquiry,
-        )
-
-    # --------------------------------------------------------
-    # BUILD INFORMATION FOR AI
-    # --------------------------------------------------------
-
-    information_parts = []
-
-    for index_name in st.session_state.ed_selected_indexes:
-
-        # ----------------------------------------------------
-        # STATEMENT OF ACCUSED
-        # ----------------------------------------------------
-
-        if index_name == "Statement of the Accused":
-
-            accused_parts = []
-
-            for accused in (
-                st.session_state.ed_accused_statements
-            ):
-
-                number = accused["number"]
-
-                text = st.session_state.get(
-                    f"ed_accused_text_{number}",
-                    accused.get(
-                        "text",
-                        "",
-                    ),
-                )
-
-                if text.strip():
-
-                    accused_parts.append(
-                        f"Accused No. {number}:\n{text}"
-                    )
-
-            if accused_parts:
-
-                information_parts.append(
-                    "INDEX: Statement of the Accused\n"
-                    + "\n\n".join(
-                        accused_parts
-                    )
-                )
-
-        # ----------------------------------------------------
-        # DOCUMENTS RECORDED
-        # ----------------------------------------------------
-
-        elif index_name == "Documents Recorded":
-
-            documents = (
-                st.session_state.ed_documents
-            )
-
-            if documents:
-
-                information_parts.append(
-                    "INDEX: Documents Recorded\n"
-                    + "\n".join(
-                        "- " + item
-                        for item in documents
-                    )
-                )
-
-        # ----------------------------------------------------
-        # INQUIRY COMMITTEE
-        # ----------------------------------------------------
-
-        elif index_name == "Inquiry Committee":
-
-            committee_parts = []
-
-            for role, details in (
-                st.session_state.ed_committee.items()
-            ):
-
-                if details.strip():
-
-                    committee_parts.append(
-                        role
-                        + ": "
-                        + details
-                    )
-
-            if committee_parts:
-
-                information_parts.append(
-                    "INDEX: Inquiry Committee\n"
-                    + "\n".join(
-                        committee_parts
-                    )
-                )
-
-        # ----------------------------------------------------
-        # NORMAL INDEX
-        # ----------------------------------------------------
-
-        else:
-
-            text = st.session_state.ed_index_values.get(
-                index_name,
-                "",
-            )
-
-            if text.strip():
-
-                information_parts.append(
-                    "INDEX: "
-                    + index_name
-                    + "\n"
-                    + text
-                )
-
-    return "\n\n".join(
-        information_parts
-    )
-
-
-# ============================================================
-# DISPLAY INPUT AREA
-# ============================================================
-
-information = ""
-
-if (
-    document_type == "Inquiry"
-    and inquiry_type == "E&D Inquiry"
-):
-
-    information = (
-        inquiry_information_boxes()
-    )
-
-elif (
-    document_type == "Inquiry"
-    and inquiry_type == "FFI Inquiry"
-):
-
-    st.info(
-        "FFI input fields will be added when "
-        "the FFI inquiry format is finalized."
-    )
 
 else:
 
-    information = (
-        normal_information_box()
+    inquiry_type = st.selectbox(
+        "Inquiry Type",
+        INQUIRY_TYPES
     )
+
+    # ========================================================
+    # FFI
+    # ========================================================
+
+    if inquiry_type == "FFI Inquiry":
+
+        st.info(
+            "🚧 FFI Inquiry format is currently "
+            "under construction / under process."
+        )
+
+    # ========================================================
+    # E&D
+    # ========================================================
+
+    else:
+
+        st.subheader(
+            "E&D Inquiry"
+        )
+
+        st.info(
+            "Select the required indexes. "
+            "You can select the same index multiple times."
+        )
+
+        # ----------------------------------------------------
+        # INDEX DROPDOWN
+        # ----------------------------------------------------
+
+        st.selectbox(
+            "Select E&D Index",
+            [
+                "-- Select an index --"
+            ] + ED_INDEXES,
+            key="ed_index_selector",
+            on_change=select_ed_index
+        )
+
+        if st.session_state.ed_index_instances:
+
+            st.button(
+                "🔄 Reset E&D Inquiry",
+                on_click=reset_inquiry
+            )
+
+        st.divider()
+
+        # ----------------------------------------------------
+        # SELECTED INDEXES
+        # ----------------------------------------------------
+
+        for instance in list(
+            st.session_state.ed_index_instances
+        ):
+
+            instance_id = instance[
+                "id"
+            ]
+
+            index_name = instance[
+                "name"
+            ]
+
+            display_index_name = (
+                get_display_index_name(
+                    st.session_state.ed_index_instances,
+                    instance
+                )
+            )
+
+            # ================================================
+            # HEADING
+            # ================================================
+
+            st.markdown(
+                f"**<u>{display_index_name}</u>**",
+                unsafe_allow_html=True
+            )
+
+            # ================================================
+            # REFERENCE NUMBER
+            # ================================================
+
+            if index_name == (
+                "Inquiry Reference No."
+            ):
+
+                st.text_input(
+                    "Enter Inquiry Reference Number",
+                    key=f"ed_text_{instance_id}",
+                    label_visibility="collapsed"
+                )
+
+            # ================================================
+            # DOCUMENTS RECORDED
+            # ================================================
+
+            elif index_name == (
+                "Documents Recorded"
+            ):
+
+                st.write(
+                    "Select the documents recorded:"
+                )
+
+                columns = st.columns(2)
+
+                for number, document in enumerate(
+                    DOCUMENT_OPTIONS
+                ):
+
+                    key = (
+                        f"ed_doc_"
+                        f"{instance_id}_"
+                        f"{document}"
+                    )
+
+                    with columns[
+                        number % 2
+                    ]:
+
+                        st.checkbox(
+                            document,
+                            key=key
+                        )
+
+                st.text_input(
+                    "Other Document",
+                    key=f"ed_other_{instance_id}"
+                )
+
+            # ================================================
+            # INQUIRY COMMITTEE
+            # ================================================
+
+            elif index_name == (
+                "Inquiry Committee"
+            ):
+
+                roles = [
+                    "Convener of Inquiry",
+                    "Member 1",
+                    "Member 2",
+                    "Departmental Representative",
+                ]
+
+                for role in roles:
+
+                    st.markdown(
+                        f"**{role}**"
+                    )
+
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+
+                        st.text_input(
+                            "ERP#",
+                            key=(
+                                f"ed_committee_"
+                                f"{instance_id}_"
+                                f"{role}_erp"
+                            )
+                        )
+
+                    with col2:
+
+                        st.text_input(
+                            "Name",
+                            key=(
+                                f"ed_committee_"
+                                f"{instance_id}_"
+                                f"{role}_name"
+                            )
+                        )
+
+                    with col3:
+
+                        st.text_input(
+                            "Designation",
+                            key=(
+                                f"ed_committee_"
+                                f"{instance_id}_"
+                                f"{role}_designation"
+                            )
+                        )
+
+            # ================================================
+            # NORMAL TEXT / VOICE INDEX
+            # ================================================
+
+            else:
+
+                st.text_area(
+                    "Enter information",
+                    height=180,
+                    key=f"ed_text_{instance_id}",
+                    label_visibility="collapsed"
+                )
+
+                st.audio_input(
+                    "🎙️ Record Voice",
+                    key=f"ed_voice_{instance_id}"
+                )
+
+                st.button(
+                    "➕ Add Voice to Text Box",
+                    key=f"ed_transcribe_{instance_id}",
+                    on_click=add_inquiry_voice,
+                    args=(instance_id,)
+                )
+
+                status = st.session_state.get(
+                    f"ed_state_{instance_id}",
+                    ""
+                )
+
+                if status:
+
+                    st.info(
+                        status
+                    )
+
+            # ================================================
+            # REMOVE THIS SPECIFIC INSTANCE
+            # ================================================
+
+            st.button(
+                "🗑️ Remove this index",
+                key=f"ed_remove_{instance_id}",
+                on_click=remove_ed_instance,
+                args=(instance_id,)
+            )
+
+            st.divider()
 
 
 # ============================================================
 # GENERATE
 # ============================================================
 
-st.divider()
+st.subheader(
+    "Generate Document"
+)
 
-generate_allowed = True
-
-if (
-    document_type == "Inquiry"
-    and inquiry_type == "FFI Inquiry"
+if st.button(
+    "✨ Generate Document",
+    type="primary",
+    use_container_width=True
 ):
 
-    generate_allowed = False
+    try:
 
+        # ====================================================
+        # E&D
+        # ====================================================
 
-if generate_allowed:
+        if (
+            document_type == "Inquiry"
+            and inquiry_type == "E&D Inquiry"
+        ):
 
-    if st.button(
-        "✨ Generate Professional Document",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        if not information.strip():
-
-            st.warning(
-                "Please provide information "
-                "by typing or speaking."
+            instances = (
+                st.session_state.ed_index_instances
             )
 
-        elif not api_key:
+            if not instances:
 
-            st.error(
-                "Please configure the selected "
-                "AI API key in Streamlit Secrets."
+                st.error(
+                    "Please select at least one "
+                    "E&D inquiry index."
+                )
+
+                st.stop()
+
+            information = (
+                build_ed_information()
             )
 
-        else:
+            selected_manifest = (
+                build_selected_index_manifest()
+            )
 
-            # ------------------------------------------------
-            # E&D-specific information
-            # ------------------------------------------------
-
-            inquiry_subject = ""
-            inquiry_reference = ""
-
-            inquiry_date = ""
-
-            if (
-                document_type == "Inquiry"
-                and inquiry_type == "E&D Inquiry"
-            ):
-
-                # Automatically capture the date at
-                # the exact time the inquiry is written.
-                inquiry_date = datetime.now().strftime(
-                    "%d %B %Y"
+            reference_number = (
+                get_first_index_value(
+                    "Inquiry Reference No."
                 )
+            )
 
-                st.session_state.ed_inquiry_date = (
-                    inquiry_date
+            selected_subject = (
+                get_first_index_value(
+                    "Subject"
                 )
-
-                inquiry_subject = (
-                    st.session_state.ed_index_values.get(
-                        "Subject",
-                        "",
-                    )
-                )
-
-                inquiry_reference = (
-                    st.session_state.ed_index_values.get(
-                        "Inquiry Reference No.",
-                        "",
-                    )
-                )
+            )
 
             prompt = build_prompt(
                 document_type=document_type,
                 inquiry_type=inquiry_type,
+                output_language=output_language,
+                tone=tone,
+                recipient="",
+                sender="",
+                subject=selected_subject,
+                information=information,
+                selected_index_manifest=selected_manifest
+            )
+
+        # ====================================================
+        # FFI
+        # ====================================================
+
+        elif (
+            document_type == "Inquiry"
+            and inquiry_type == "FFI Inquiry"
+        ):
+
+            st.warning(
+                "FFI Inquiry is currently under construction."
+            )
+
+            st.stop()
+
+        # ====================================================
+        # EMAIL / LETTER
+        # ====================================================
+
+        else:
+
+            if document_type == "Email":
+
+                recipient = st.session_state.get(
+                    "email_recipient",
+                    ""
+                )
+
+                sender = st.session_state.get(
+                    "email_sender",
+                    ""
+                )
+
+                subject = st.session_state.get(
+                    "email_subject",
+                    ""
+                )
+
+            else:
+
+                recipient = st.session_state.get(
+                    "letter_recipient",
+                    ""
+                )
+
+                sender = st.session_state.get(
+                    "letter_sender",
+                    ""
+                )
+
+                subject = st.session_state.get(
+                    "letter_subject",
+                    ""
+                )
+
+            information = st.session_state.get(
+                "normal_information",
+                ""
+            )
+
+            if not information.strip():
+
+                st.warning(
+                    "Please enter information "
+                    "or add voice input."
+                )
+
+                st.stop()
+
+            prompt = build_prompt(
+                document_type=document_type,
+                inquiry_type="",
+                output_language=output_language,
                 tone=tone,
                 recipient=recipient,
                 sender=sender,
-                subject=(
-                    inquiry_subject
-                    if inquiry_subject
-                    else subject
-                ),
-                information=information,
-                output_language=output_language,
-                inquiry_date=inquiry_date,
+                subject=subject,
+                information=information
             )
 
-            with st.spinner(
-                "✨ Preparing your professional document..."
-            ):
+            reference_number = ""
 
-                try:
+        # ====================================================
+        # API KEY
+        # ====================================================
 
-                    if provider == "Groq":
+        api_key = get_api_key(
+            provider
+        )
 
-                        draft = call_groq(
-                            api_key,
-                            prompt,
-                        )
+        if not api_key:
 
-                    else:
+            st.error(
+                f"{provider} API key is not configured."
+            )
 
-                        draft = call_gemini(
-                            api_key,
-                            prompt,
-                        )
+            st.stop()
 
-                    # ------------------------------------------------
-                    # Add deterministic E&D header.
-                    # This ensures the reference number and date
-                    # are always present and correct.
-                    # ------------------------------------------------
+        # ====================================================
+        # AI GENERATION
+        # ====================================================
 
-                    if (
-                        document_type == "Inquiry"
-                        and inquiry_type == "E&D Inquiry"
-                    ):
+        with st.spinner(
+            "Generating professional document..."
+        ):
 
-                        draft = add_inquiry_header(
-                            draft=draft,
-                            reference_number=inquiry_reference,
-                            inquiry_date=inquiry_date,
-                        )
+            if provider == "Groq":
 
-                    st.session_state.generated_draft = (
-                        draft
-                    )
+                draft = call_groq(
+                    api_key,
+                    prompt
+                )
 
-                    save_draft(
-                        document_type,
-                        inquiry_type,
-                        tone,
-                        recipient,
-                        sender,
-                        (
-                            inquiry_subject
-                            if inquiry_subject
-                            else subject
-                        ),
-                        information,
-                        draft,
-                    )
+            else:
 
-                    st.success(
-                        "✅ Document generated and "
-                        "saved successfully!"
-                    )
+                draft = call_gemini(
+                    api_key,
+                    prompt
+                )
 
-                except Exception as e:
+        # ====================================================
+        # E&D HEADER
+        # ====================================================
 
-                    st.error(
-                        str(e)
-                    )
+        if (
+            document_type == "Inquiry"
+            and inquiry_type == "E&D Inquiry"
+        ):
+
+            draft = add_inquiry_header(
+                draft,
+                (
+                    reference_number
+                    if reference_number
+                    else "Not Provided"
+                )
+            )
+
+        # ====================================================
+        # SAVE GENERATED DRAFT
+        # ====================================================
+
+        st.session_state.generated_draft = (
+            draft
+        )
+
+        save_draft(
+            document_type=document_type,
+
+            inquiry_type=(
+                inquiry_type
+                if document_type == "Inquiry"
+                else ""
+            ),
+
+            tone=tone,
+
+            recipient=(
+                recipient
+                if document_type != "Inquiry"
+                else ""
+            ),
+
+            sender=(
+                sender
+                if document_type != "Inquiry"
+                else ""
+            ),
+
+            subject=(
+                selected_subject
+                if (
+                    document_type == "Inquiry"
+                    and inquiry_type == "E&D Inquiry"
+                )
+                else (
+                    subject
+                    if document_type != "Inquiry"
+                    else ""
+                )
+            ),
+
+            key_points=information,
+
+            draft=draft
+        )
+
+        st.success(
+            "Document generated successfully."
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Error: {e}"
+        )
 
 
 # ============================================================
@@ -2632,92 +2433,68 @@ if st.session_state.generated_draft:
     st.divider()
 
     st.subheader(
-        "✏️ Generated Document"
+        "Generated Document"
     )
 
-    edited_draft = st.text_area(
-        "Review and edit your document",
+    st.text_area(
+        "Generated Draft",
         value=st.session_state.generated_draft,
-        height=600,
-        key="generated_document_editor",
+        height=600
     )
 
-    st.session_state.generated_draft = (
-        edited_draft
-    )
+    # ========================================================
+    # DOWNLOAD BUTTONS
+    # ========================================================
 
-    st.divider()
-
-    st.subheader(
-        "📤 Export"
-    )
-
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
 
         st.download_button(
-            "📕 Download PDF",
-            data=export_pdf(
-                edited_draft
-            ),
-            file_name=(
-                "draftforge_document.pdf"
-            ),
-            mime="application/pdf",
-            use_container_width=True,
-        )
-
-        st.download_button(
-            "📘 Download DOCX",
+            "📄 Download DOCX",
             data=export_docx(
-                edited_draft
+                st.session_state.generated_draft
             ),
-            file_name=(
-                "draftforge_document.docx"
-            ),
+            file_name="DraftForge_Document.docx",
             mime=(
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
             ),
-            use_container_width=True,
+            use_container_width=True
         )
 
     with col2:
 
         st.download_button(
-            "📄 Download TXT",
-            data=export_txt(
-                edited_draft
+            "📕 Download PDF",
+            data=export_pdf(
+                st.session_state.generated_draft
             ),
-            file_name=(
-                "draftforge_document.txt"
-            ),
-            mime="text/plain",
-            use_container_width=True,
+            file_name="DraftForge_Document.pdf",
+            mime="application/pdf",
+            use_container_width=True
         )
+
+    with col3:
+
+        st.download_button(
+            "📝 Download TXT",
+            data=export_txt(
+                st.session_state.generated_draft
+            ),
+            file_name="DraftForge_Document.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    with col4:
 
         st.download_button(
             "🖼️ Download PNG",
             data=export_png(
-                edited_draft
+                st.session_state.generated_draft
             ),
-            file_name=(
-                "draftforge_document.png"
-            ),
+            file_name="DraftForge_Document.png",
             mime="image/png",
-            use_container_width=True,
+            use_container_width=True
         )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "DraftForge — AI-powered professional "
-    "document creation with multilingual "
-    "text and voice input."
-)
