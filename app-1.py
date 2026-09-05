@@ -2404,7 +2404,7 @@ elif st.session_state.document_type == "Inquiry":
             # Inquiry Committee
             # ------------------------------------------------
 
-    if base_name == "Inquiry Committee":
+if base_name == "Inquiry Committee":
 
     st.markdown(
         """
