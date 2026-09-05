@@ -2197,115 +2197,106 @@ elif st.session_state.document_type == "Inquiry":
             # INQUIRY COMMITTEE
             # ------------------------------------------------
 
-            if base_name == (
-                "Inquiry Committee"
-            ):
+            if base_name == "Inquiry Committee":
+    st.markdown("### 👥 Inquiry Committee")
+    st.caption(
+        "Enter the details of each committee member under the role shown below."
+    )
 
-                st.info(
-                    "Enter ERP#, name and designation for "
-                    "each committee member."
-                )
+    committee_data = item.get("committee", {})
 
-                committee = item.get(
-                    "committee",
-                    [],
-                )
+    for role in COMMITTEE_ROLES:
+        st.markdown(
+            f"""
+            <div style="
+                background:#f1f5f9;
+                border:1px solid #cbd5e1;
+                border-radius:12px;
+                padding:14px 16px 8px 16px;
+                margin:12px 0 8px 0;
+            ">
+                <div style="
+                    color:#0f172a;
+                    font-size:18px;
+                    font-weight:700;
+                    margin-bottom:4px;
+                ">
+                    {role}
+                </div>
+                <div style="
+                    color:#475569;
+                    font-size:13px;
+                ">
+                    Enter the ERP#, name and designation for this role.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-                while len(committee) < len(
-                    COMMITTEE_ROLES
-                ):
+        role_key = role.lower().replace(" ", "_").replace("#", "no")
 
-                    role = COMMITTEE_ROLES[
-                        len(committee)
-                    ]
+        current = committee_data.get(
+            role,
+            {
+                "ERP#": "",
+                "Name": "",
+                "Designation": "",
+            },
+        )
 
-                    committee.append(
-                        {
-                            "role": role,
-                            "erp": "",
-                            "name": "",
-                            "designation": "",
-                        }
-                    )
+        col1, col2, col3 = st.columns(3)
 
-                for member_index, role in enumerate(
-                    COMMITTEE_ROLES
-                ):
+        with col1:
+            erp = st.text_input(
+                "ERP#",
+                value=current.get("ERP#", ""),
+                key=f"committee_{position}_{role_key}_erp",
+                placeholder="Enter ERP#",
+            )
 
-                    member = committee[
-                        member_index
-                    ]
+        with col2:
+            name = st.text_input(
+                "Name",
+                value=current.get("Name", ""),
+                key=f"committee_{position}_{role_key}_name",
+                placeholder="Enter full name",
+            )
 
-                    st.markdown(
-                        f"**{role}**"
-                    )
+        with col3:
+            designation = st.text_input(
+                "Designation",
+                value=current.get("Designation", ""),
+                key=f"committee_{position}_{role_key}_designation",
+                placeholder="Enter designation",
+            )
 
-                    col1, col2, col3 = st.columns(
-                        3
-                    )
+        committee_data[role] = {
+            "ERP#": erp,
+            "Name": name,
+            "Designation": designation,
+        }
 
-                    with col1:
+    item["committee"] = committee_data
 
-                        member["erp"] = st.text_input(
-                            "ERP#",
-                            value=member.get(
-                                "erp",
-                                "",
-                            ),
-                            key=(
-                                f"committee_erp_"
-                                f"{position}_"
-                                f"{member_index}"
-                            ),
-                            placeholder="Enter ERP#",
-                        )
+    st.markdown(
+        """
+        <div style="
+            background:#eff6ff;
+            border-left:4px solid #2563eb;
+            padding:10px 14px;
+            border-radius:8px;
+            color:#1e3a8a;
+            margin-top:12px;
+        ">
+            <b>Tip:</b> Each shaded block represents one specific committee role.
+            Enter the ERP#, Name and Designation only for that role.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                    with col2:
-
-                        member["name"] = st.text_input(
-                            "Name",
-                            value=member.get(
-                                "name",
-                                "",
-                            ),
-                            key=(
-                                f"committee_name_"
-                                f"{position}_"
-                                f"{member_index}"
-                            ),
-                            placeholder="Enter name",
-                        )
-
-                    with col3:
-
-                        member["designation"] = st.text_input(
-                            "Designation",
-                            value=member.get(
-                                "designation",
-                                "",
-                            ),
-                            key=(
-                                f"committee_designation_"
-                                f"{position}_"
-                                f"{member_index}"
-                            ),
-                            placeholder="Enter designation",
-                        )
-
-                item["committee"] = committee
-
-                if st.button(
-                    "🗑 Remove this section",
-                    key=f"remove_committee_{position}",
-                ):
-
-                    del st.session_state.index_data[
-                        position
-                    ]
-
-                    st.rerun()
-
-                continue
+    continue
 
             # ------------------------------------------------
             # Q&A
