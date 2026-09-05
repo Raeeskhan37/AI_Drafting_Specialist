@@ -1,6 +1,7 @@
 import io
 import os
 import sqlite3
+import hashlib
 from datetime import datetime
 
 import requests
@@ -37,11 +38,17 @@ GEMINI_URL = (
     "v1beta/models/gemini-2.0-flash:generateContent"
 )
 
+# Four functional categories:
+# Email
+# Letter
+# FFI Inquiry
+# E&D Inquiry
+#
+# FFI and E&D are handled as inquiry sub-types.
 DOCUMENT_TYPES = [
     "Email",
     "Letter",
     "Inquiry",
-    "Custom",
 ]
 
 INQUIRY_TYPES = [
@@ -109,16 +116,25 @@ DB_PATH = os.path.join(
 DEFAULT_STATE = {
     "generated_draft": "",
     "normal_information": "",
+
     "ed_selected_indexes": [],
     "ed_index_values": {},
+
+    # Multiple accused persons
+    "ed_accused_statements": [],
+
     "ed_documents": [],
     "ed_other_document": "",
+
     "ed_committee": {
         "Convener of Inquiry": "",
         "Member 1": "",
         "Member 2": "",
         "Departmental Representative": "",
     },
+
+    # Automatically assigned when Generate is pressed
+    "ed_inquiry_date": "",
 }
 
 
@@ -126,14 +142,16 @@ for key, value in DEFAULT_STATE.items():
 
     if key not in st.session_state:
 
-        # Copy mutable objects so they are not shared.
         if isinstance(value, list):
+
             st.session_state[key] = list(value)
 
         elif isinstance(value, dict):
+
             st.session_state[key] = dict(value)
 
         else:
+
             st.session_state[key] = value
 
 
@@ -415,11 +433,6 @@ def transcribe_audio(
 
 # ============================================================
 # VOICE CALLBACK HELPERS
-#
-# IMPORTANT:
-# These callbacks run before the next page render.
-# Therefore it is safe to update the text widget's
-# session-state value here.
 # ============================================================
 
 def append_voice_to_widget(
@@ -475,14 +488,13 @@ def append_voice_to_widget(
 
             combined = transcript
 
-        # This is executed by the callback
-        # before the widget is instantiated
-        # on the next Streamlit run.
+        # Callback executes before the next
+        # page render, therefore updating the
+        # widget state here is safe.
         st.session_state[
             text_widget_key
         ] = combined
 
-        # Keep application state synchronized.
         st.session_state[
             state_storage_key
         ] = combined
@@ -530,6 +542,23 @@ def add_inquiry_voice(
     )
 
 
+def add_accused_voice(
+    accused_number
+):
+
+    append_voice_to_widget(
+        audio_key=(
+            f"ed_accused_voice_{accused_number}"
+        ),
+        text_widget_key=(
+            f"ed_accused_text_{accused_number}"
+        ),
+        state_storage_key=(
+            f"ed_accused_state_{accused_number}"
+        ),
+    )
+
+
 # ============================================================
 # AI PROMPT
 # ============================================================
@@ -543,6 +572,7 @@ def build_prompt(
     subject,
     information,
     output_language,
+    inquiry_date="",
 ):
 
     if output_language == "Same as input":
@@ -571,10 +601,20 @@ def build_prompt(
 
         if inquiry_type == "E&D Inquiry":
 
-            inquiry_instruction = """
+            inquiry_instruction = f"""
 This is an official E&D (Efficiency &
 Discipline / departmental disciplinary)
 inquiry.
+
+The inquiry date assigned by the system is:
+
+{inquiry_date}
+
+The system has already captured the
+Inquiry Reference No. and Date for the
+document header.
+
+Do not invent or change either value.
 
 The user has supplied information through
 specific inquiry indexes.
@@ -600,6 +640,28 @@ The normal E&D structure may include:
 14. Recommendations
 15. Documents Recorded
 16. Inquiry Committee
+
+IMPORTANT:
+
+The Statement of the Accused may contain
+multiple accused persons.
+
+Each accused person's statement must be
+kept separately.
+
+Do NOT merge the statements of different
+accused persons.
+
+Do NOT attribute one accused person's
+statement to another accused person.
+
+Preserve labels such as:
+
+Accused No. 1
+Accused No. 2
+Accused No. 3
+
+and so on.
 
 Preserve the supplied index identity.
 
@@ -627,6 +689,8 @@ the selected documents clearly.
 The Inquiry Committee section should preserve
 the Convener, Member 1, Member 2 and
 Departmental Representative details.
+
+Do not fabricate committee information.
 """
 
         else:
@@ -663,6 +727,9 @@ SENDER:
 
 SUBJECT:
 {subject}
+
+INQUIRY DATE:
+{inquiry_date}
 
 USER INFORMATION:
 {information}
@@ -885,6 +952,91 @@ def call_gemini(
             "Gemini connection error: "
             + str(e)
         ) from e
+
+
+# ============================================================
+# E&D HEADER
+# ============================================================
+
+def create_inquiry_header(
+    reference_number,
+    inquiry_date,
+):
+
+    reference_number = (
+        reference_number.strip()
+        if reference_number
+        else "Not Provided"
+    )
+
+    return (
+        "DEPARTMENTAL INQUIRY REPORT\n\n"
+        "Inquiry Reference No.: "
+        + reference_number
+        + "\n"
+        "Date: "
+        + inquiry_date
+        + "\n\n"
+    )
+
+
+def add_inquiry_header(
+    draft,
+    reference_number,
+    inquiry_date,
+):
+
+    header = create_inquiry_header(
+        reference_number,
+        inquiry_date,
+    )
+
+    # Prevent accidental duplicate header
+    # if AI happens to generate one.
+    cleaned = draft.strip()
+
+    lines = cleaned.splitlines()
+
+    filtered_lines = []
+
+    skip_next = False
+
+    for line in lines:
+
+        lower_line = line.lower().strip()
+
+        if lower_line in [
+            "departmental inquiry report",
+            "inquiry reference no.",
+            "date:",
+        ]:
+
+            continue
+
+        if (
+            lower_line.startswith(
+                "inquiry reference no:"
+            )
+            or lower_line.startswith(
+                "inquiry reference no.:"
+            )
+        ):
+
+            continue
+
+        if lower_line.startswith(
+            "date:"
+        ):
+
+            continue
+
+        filtered_lines.append(line)
+
+    cleaned = "\n".join(
+        filtered_lines
+    ).strip()
+
+    return header + cleaned
 
 
 # ============================================================
@@ -1236,6 +1388,11 @@ def select_ed_index():
                 selected
             )
 
+        # Reset selector safely inside callback.
+        st.session_state.ed_index_selector = (
+            "-- Select an index --"
+        )
+
 
 def remove_ed_index(index_name):
 
@@ -1245,11 +1402,78 @@ def remove_ed_index(index_name):
             index_name
         )
 
+    # Remove stored text state.
+    st.session_state.ed_index_values.pop(
+        index_name,
+        None,
+    )
+
+    st.session_state.pop(
+        "ed_text_" + index_name,
+        None,
+    )
+
+    st.session_state.pop(
+        "ed_state_" + index_name,
+        None,
+    )
+
+    st.session_state.pop(
+        "ed_voice_" + index_name,
+        None,
+    )
+
+
+def add_accused():
+
+    number = (
+        len(
+            st.session_state.ed_accused_statements
+        )
+        + 1
+    )
+
+    st.session_state.ed_accused_statements.append(
+        {
+            "number": number,
+            "text": "",
+        }
+    )
+
+
+def remove_accused(
+    accused_number
+):
+
+    st.session_state.ed_accused_statements = [
+        item
+        for item in st.session_state.ed_accused_statements
+        if item["number"] != accused_number
+    ]
+
+    st.session_state.pop(
+        f"ed_accused_text_{accused_number}",
+        None,
+    )
+
+    st.session_state.pop(
+        f"ed_accused_state_{accused_number}",
+        None,
+    )
+
+    st.session_state.pop(
+        f"ed_accused_voice_{accused_number}",
+        None,
+    )
+
 
 def reset_inquiry():
 
     st.session_state.ed_selected_indexes = []
     st.session_state.ed_index_values = {}
+
+    st.session_state.ed_accused_statements = []
+
     st.session_state.ed_documents = []
     st.session_state.ed_other_document = ""
 
@@ -1259,6 +1483,8 @@ def reset_inquiry():
         "Member 2": "",
         "Departmental Representative": "",
     }
+
+    st.session_state.ed_inquiry_date = ""
 
 
 # ============================================================
@@ -1482,9 +1708,6 @@ tone = st.selectbox(
 # RECIPIENT / SENDER / SUBJECT
 # ============================================================
 
-# For E&D inquiry, Subject is an index and
-# therefore the normal Subject field is not shown.
-
 if (
     document_type == "Inquiry"
     and inquiry_type == "E&D Inquiry"
@@ -1590,8 +1813,6 @@ def normal_information_box():
         ),
     )
 
-    # Synchronize application state.
-    # This does NOT modify the widget key.
     st.session_state.normal_information = (
         st.session_state.get(
             text_widget_key,
@@ -1743,6 +1964,149 @@ def render_inquiry_committee():
 
 
 # ============================================================
+# MULTIPLE ACCUSED STATEMENTS
+# ============================================================
+
+def render_accused_statements():
+
+    st.markdown(
+        "### 👤 Statements of Accused Persons"
+    )
+
+    st.caption(
+        "Add each accused person separately. "
+        "Each accused can provide information by "
+        "typing or using voice input."
+    )
+
+    # --------------------------------------------------------
+    # If none exists, create the first accused.
+    # --------------------------------------------------------
+
+    if not st.session_state.ed_accused_statements:
+
+        st.button(
+            "➕ Add Accused No. 1",
+            key="add_first_accused",
+            on_click=add_accused,
+            use_container_width=True,
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Render each accused.
+    # --------------------------------------------------------
+
+    for accused in list(
+        st.session_state.ed_accused_statements
+    ):
+
+        number = accused["number"]
+
+        text_key = (
+            f"ed_accused_text_{number}"
+        )
+
+        state_key = (
+            f"ed_accused_state_{number}"
+        )
+
+        voice_key = (
+            f"ed_accused_voice_{number}"
+        )
+
+        button_key = (
+            f"ed_accused_transcribe_{number}"
+        )
+
+        if text_key not in st.session_state:
+
+            st.session_state[text_key] = (
+                accused.get(
+                    "text",
+                    "",
+                )
+            )
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Heading is bold + underlined.
+        # ----------------------------------------------------
+
+        st.markdown(
+            f"**<u>Accused No. {number}</u>**",
+            unsafe_allow_html=True,
+        )
+
+        # ----------------------------------------------------
+        # Text area
+        # ----------------------------------------------------
+
+        st.text_area(
+            "Type or edit statement",
+            height=200,
+            key=text_key,
+            placeholder=(
+                f"Enter the statement / defence "
+                f"of Accused No. {number}..."
+            ),
+        )
+
+        current_value = st.session_state.get(
+            text_key,
+            "",
+        )
+
+        accused["text"] = current_value
+
+        # ----------------------------------------------------
+        # Voice
+        # ----------------------------------------------------
+
+        st.audio_input(
+            "🎙️ Record voice for this accused",
+            sample_rate=16000,
+            key=voice_key,
+        )
+
+        st.button(
+            "🎙️ Add Voice to This Statement",
+            key=button_key,
+            use_container_width=True,
+            on_click=add_accused_voice,
+            args=(number,),
+        )
+
+        st.button(
+            "🗑️ Remove this accused",
+            key=f"remove_accused_{number}",
+            on_click=remove_accused,
+            args=(number,),
+        )
+
+        st.divider()
+
+    # --------------------------------------------------------
+    # Add another accused.
+    # --------------------------------------------------------
+
+    next_number = (
+        len(
+            st.session_state.ed_accused_statements
+        )
+        + 1
+    )
+
+    st.button(
+        f"➕ Add Accused No. {next_number}",
+        key="add_another_accused",
+        on_click=add_accused,
+        use_container_width=True,
+    )
+
+
+# ============================================================
 # E&D INQUIRY INPUT
 # ============================================================
 
@@ -1839,21 +2203,37 @@ def inquiry_information_boxes():
                 "",
             )
 
+        # ----------------------------------------------------
+        # INDEX HEADING
+        # Bold + underlined
+        # ----------------------------------------------------
+
         st.markdown(
-            "#### 📌 "
-            + index_name
+            f"**<u>{index_name}</u>**",
+            unsafe_allow_html=True,
         )
 
         # ----------------------------------------------------
-        # SPECIAL INDEX: DOCUMENTS RECORDED
+        # SPECIAL INDEX:
+        # STATEMENT OF ACCUSED
         # ----------------------------------------------------
 
-        if index_name == "Documents Recorded":
+        if index_name == "Statement of the Accused":
+
+            render_accused_statements()
+
+        # ----------------------------------------------------
+        # SPECIAL INDEX:
+        # DOCUMENTS RECORDED
+        # ----------------------------------------------------
+
+        elif index_name == "Documents Recorded":
 
             render_documents_recorded()
 
         # ----------------------------------------------------
-        # SPECIAL INDEX: INQUIRY COMMITTEE
+        # SPECIAL INDEX:
+        # INQUIRY COMMITTEE
         # ----------------------------------------------------
 
         elif index_name == "Inquiry Committee":
@@ -1876,11 +2256,6 @@ def inquiry_information_boxes():
                 ),
             )
 
-            # IMPORTANT:
-            # We only copy FROM the widget into
-            # separate application state.
-            # We NEVER write back to the widget
-            # key during this run.
             current_value = st.session_state.get(
                 text_widget_key,
                 "",
@@ -1929,14 +2304,11 @@ def inquiry_information_boxes():
             + str(len(ED_INDEXES))
         )
 
-        if st.button(
+        st.button(
             "↻ Reset E&D Inquiry Indexes",
             use_container_width=True,
-        ):
-
-            reset_inquiry()
-
-            st.rerun()
+            on_click=reset_inquiry,
+        )
 
     # --------------------------------------------------------
     # BUILD INFORMATION FOR AI
@@ -1946,7 +2318,48 @@ def inquiry_information_boxes():
 
     for index_name in st.session_state.ed_selected_indexes:
 
-        if index_name == "Documents Recorded":
+        # ----------------------------------------------------
+        # STATEMENT OF ACCUSED
+        # ----------------------------------------------------
+
+        if index_name == "Statement of the Accused":
+
+            accused_parts = []
+
+            for accused in (
+                st.session_state.ed_accused_statements
+            ):
+
+                number = accused["number"]
+
+                text = st.session_state.get(
+                    f"ed_accused_text_{number}",
+                    accused.get(
+                        "text",
+                        "",
+                    ),
+                )
+
+                if text.strip():
+
+                    accused_parts.append(
+                        f"Accused No. {number}:\n{text}"
+                    )
+
+            if accused_parts:
+
+                information_parts.append(
+                    "INDEX: Statement of the Accused\n"
+                    + "\n\n".join(
+                        accused_parts
+                    )
+                )
+
+        # ----------------------------------------------------
+        # DOCUMENTS RECORDED
+        # ----------------------------------------------------
+
+        elif index_name == "Documents Recorded":
 
             documents = (
                 st.session_state.ed_documents
@@ -1961,6 +2374,10 @@ def inquiry_information_boxes():
                         for item in documents
                     )
                 )
+
+        # ----------------------------------------------------
+        # INQUIRY COMMITTEE
+        # ----------------------------------------------------
 
         elif index_name == "Inquiry Committee":
 
@@ -1986,6 +2403,10 @@ def inquiry_information_boxes():
                         committee_parts
                     )
                 )
+
+        # ----------------------------------------------------
+        # NORMAL INDEX
+        # ----------------------------------------------------
 
         else:
 
@@ -2080,18 +2501,40 @@ if generate_allowed:
 
         else:
 
-            # For E&D the subject is obtained
-            # from the inquiry index.
+            # ------------------------------------------------
+            # E&D-specific information
+            # ------------------------------------------------
+
             inquiry_subject = ""
+            inquiry_reference = ""
+
+            inquiry_date = ""
 
             if (
                 document_type == "Inquiry"
                 and inquiry_type == "E&D Inquiry"
             ):
 
+                # Automatically capture the date at
+                # the exact time the inquiry is written.
+                inquiry_date = datetime.now().strftime(
+                    "%d %B %Y"
+                )
+
+                st.session_state.ed_inquiry_date = (
+                    inquiry_date
+                )
+
                 inquiry_subject = (
                     st.session_state.ed_index_values.get(
                         "Subject",
+                        "",
+                    )
+                )
+
+                inquiry_reference = (
+                    st.session_state.ed_index_values.get(
+                        "Inquiry Reference No.",
                         "",
                     )
                 )
@@ -2109,6 +2552,7 @@ if generate_allowed:
                 ),
                 information=information,
                 output_language=output_language,
+                inquiry_date=inquiry_date,
             )
 
             with st.spinner(
@@ -2129,6 +2573,23 @@ if generate_allowed:
                         draft = call_gemini(
                             api_key,
                             prompt,
+                        )
+
+                    # ------------------------------------------------
+                    # Add deterministic E&D header.
+                    # This ensures the reference number and date
+                    # are always present and correct.
+                    # ------------------------------------------------
+
+                    if (
+                        document_type == "Inquiry"
+                        and inquiry_type == "E&D Inquiry"
+                    ):
+
+                        draft = add_inquiry_header(
+                            draft=draft,
+                            reference_number=inquiry_reference,
+                            inquiry_date=inquiry_date,
                         )
 
                     st.session_state.generated_draft = (
@@ -2181,8 +2642,6 @@ if st.session_state.generated_draft:
         key="generated_document_editor",
     )
 
-    # As with the other widget, only copy
-    # the widget value after rendering.
     st.session_state.generated_draft = (
         edited_draft
     )
