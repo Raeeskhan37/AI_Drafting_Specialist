@@ -2,11 +2,10 @@ import io
 import os
 import re
 import json
-import hashlib
-from datetime import datetime
-
 import requests
 import streamlit as st
+
+from datetime import datetime
 from groq import Groq
 
 from docx import Document
@@ -18,35 +17,28 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
     page_title="DraftForge — AI Document Composer",
     page_icon="📝",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
 # ============================================================
-# AI MODELS
+# CONSTANTS
 # ============================================================
 
 GROQ_MODEL = "openai/gpt-oss-120b"
 WHISPER_MODEL = "whisper-large-v3"
+
 GEMINI_MODEL = "gemini-2.0-flash"
-
-
-# ============================================================
-# PROFILE FILE
-# ============================================================
 
 PROFILE_FILE = "user_profile.json"
 
-
-# ============================================================
-# E&D INDEXES
-# ============================================================
 
 ED_INDEXES = [
     "Inquiry Reference No.",
@@ -68,19 +60,11 @@ ED_INDEXES = [
 ]
 
 
-# ============================================================
-# SPECIAL STRUCTURED INDEXES
-# ============================================================
-
 SPECIAL_INDEXES = {
     "Documents Recorded",
     "Inquiry Committee",
 }
 
-
-# ============================================================
-# Q&A INDEX
-# ============================================================
 
 QA_INDEX_PREFIX = "Questions / Answers with the Accused"
 
@@ -99,13 +83,14 @@ DOCUMENTS_RECORDED = [
     "Complaint / Application",
     "Written Explanation",
     "Official Record",
+
+    # NEW
+    "Statement of Accused",
+    "Statement of Witness",
+
     "Other",
 ]
 
-
-# ============================================================
-# INQUIRY COMMITTEE
-# ============================================================
 
 COMMITTEE_ROLES = [
     "Convener of Inquiry",
@@ -126,66 +111,19 @@ st.markdown(
     .main-title {
         font-size: 2.2rem;
         font-weight: 700;
-        margin-bottom: 0;
+        margin-bottom: 0.2rem;
     }
 
     .subtitle {
-        font-size: 1rem;
         color: #666;
-        margin-top: 0;
+        margin-bottom: 1.5rem;
     }
 
-    .composer-box {
-        padding: 18px;
-        border-radius: 12px;
-        border: 1px solid #ddd;
-        background-color: #fafafa;
-        margin-bottom: 18px;
-    }
-
-    .voice-heading {
-        font-weight: 600;
-        margin-bottom: 5px;
-    }
-
-    .voice-help {
-        font-size: 0.85rem;
-        color: #666;
-        margin-bottom: 8px;
-    }
-
-    .index-card {
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #ddd;
-        background-color: #fafafa;
-        margin-bottom: 15px;
-    }
-
-    .warning-box {
+    .developer-box {
         padding: 12px;
-        border-radius: 8px;
-        border: 1px solid #e0b000;
-        background-color: #fff8d8;
-    }
-
-    .qa-table {
-        width: 100%;
-        border-collapse: collapse;
+        border-radius: 10px;
+        border: 1px solid rgba(128,128,128,0.25);
         margin-top: 10px;
-        margin-bottom: 20px;
-    }
-
-    .qa-table th,
-    .qa-table td {
-        border: 1px solid #999;
-        padding: 10px;
-        vertical-align: top;
-        text-align: left;
-    }
-
-    .qa-table th {
-        font-weight: 700;
     }
 
     </style>
@@ -195,7 +133,7 @@ st.markdown(
 
 
 # ============================================================
-# USER PROFILE
+# PROFILE FUNCTIONS
 # ============================================================
 
 def load_user_profile():
@@ -231,7 +169,6 @@ def load_user_profile():
                         )
 
     except Exception:
-
         pass
 
     return default
@@ -261,70 +198,55 @@ def save_user_profile(profile):
         return False
 
 
-def build_sender_signature():
-
-    profile = st.session_state.get(
-        "user_profile",
-        {},
-    )
+def get_signature(profile):
 
     lines = []
 
-    if profile.get("name"):
-        lines.append(profile["name"])
+    if profile.get(
+        "name",
+        "",
+    ).strip():
 
-    if profile.get("designation"):
-        lines.append(profile["designation"])
-
-    if profile.get("contact_no"):
         lines.append(
-            f"Contact No.: {profile['contact_no']}"
+            profile["name"].strip()
         )
 
-    if profile.get("current_station"):
+    if profile.get(
+        "designation",
+        "",
+    ).strip():
+
         lines.append(
-            f"Current Station: {profile['current_station']}"
+            profile["designation"].strip()
         )
 
-    return "\n".join(lines)
+    if profile.get(
+        "contact_no",
+        "",
+    ).strip():
 
+        lines.append(
+            f"Contact No.: "
+            f"{profile['contact_no'].strip()}"
+        )
 
-def append_profile_signature(draft):
+    if profile.get(
+        "current_station",
+        "",
+    ).strip():
 
-    signature = build_sender_signature()
+        lines.append(
+            f"Current Station: "
+            f"{profile['current_station'].strip()}"
+        )
 
-    if not signature:
-        return draft
+    if not lines:
+
+        return ""
 
     return (
-        draft.rstrip()
-        + "\n\n"
-        + signature.strip()
-    )
-
-
-def profile_is_complete():
-
-    profile = st.session_state.get(
-        "user_profile",
-        {},
-    )
-
-    required = [
-        "name",
-        "designation",
-        "contact_no",
-        "current_station",
-    ]
-
-    return all(
-        str(
-            profile.get(
-                item,
-                "",
-            )
-        ).strip()
-        for item in required
+        "\n\n"
+        + "\n".join(lines)
     )
 
 
@@ -336,33 +258,36 @@ def initialize_state():
 
     defaults = {
 
+        "profile": load_user_profile(),
+
+        "profile_name": "",
+        "profile_designation": "",
+        "profile_contact": "",
+        "profile_station": "",
+
         "document_type": "Email",
 
-        "inquiry_type": "E&D Inquiry",
+        "email_instruction": "",
+        "letter_instruction": "",
+
+        "inquiry_indexes": [],
+        "inquiry_index_counter": {},
 
         "generated_draft": "",
 
+        # Canonical document
         "editable_draft": "",
 
-        "email_input": "",
+        # Text-area widget state
+        "document_editor": "",
 
-        "letter_input": "",
-
-        "email_audio_seen": "",
-
-        "letter_audio_seen": "",
-
-        "ed_instances": [],
-
-        "history": [],
-
-        "user_profile": load_user_profile(),
+        # Used to synchronize editor BEFORE
+        # the widget is created.
+        "editor_sync": "",
 
         "edit_instruction": "",
 
-        "documents_recorded_selected": [],
-
-        "inquiry_committee_data": {},
+        "history": [],
 
     }
 
@@ -372,32 +297,53 @@ def initialize_state():
 
             st.session_state[key] = value
 
-    profile = st.session_state.user_profile
 
-    if "profile_name" not in st.session_state:
+    profile = st.session_state["profile"]
 
-        st.session_state.profile_name = profile.get(
+
+    if not st.session_state[
+        "profile_name"
+    ]:
+
+        st.session_state[
+            "profile_name"
+        ] = profile.get(
             "name",
             "",
         )
 
-    if "profile_designation" not in st.session_state:
 
-        st.session_state.profile_designation = profile.get(
+    if not st.session_state[
+        "profile_designation"
+    ]:
+
+        st.session_state[
+            "profile_designation"
+        ] = profile.get(
             "designation",
             "",
         )
 
-    if "profile_contact" not in st.session_state:
 
-        st.session_state.profile_contact = profile.get(
+    if not st.session_state[
+        "profile_contact"
+    ]:
+
+        st.session_state[
+            "profile_contact"
+        ] = profile.get(
             "contact_no",
             "",
         )
 
-    if "profile_station" not in st.session_state:
 
-        st.session_state.profile_station = profile.get(
+    if not st.session_state[
+        "profile_station"
+    ]:
+
+        st.session_state[
+            "profile_station"
+        ] = profile.get(
             "current_station",
             "",
         )
@@ -407,36 +353,28 @@ initialize_state()
 
 
 # ============================================================
-# API KEY
+# SECRET / API FUNCTIONS
 # ============================================================
 
-def get_secret(
-    name,
-    default=None,
-):
+def get_secret(name):
 
     try:
 
         value = st.secrets.get(name)
 
         if value:
+
             return value
 
     except Exception:
-
         pass
 
-    return os.getenv(
+    return os.environ.get(
         name,
-        default,
+        "",
     )
 
 
-# ============================================================
-# GROQ CLIENT
-# ============================================================
-
-@st.cache_resource
 def get_groq_client():
 
     api_key = get_secret(
@@ -444,6 +382,7 @@ def get_groq_client():
     )
 
     if not api_key:
+
         return None
 
     try:
@@ -458,71 +397,167 @@ def get_groq_client():
 
 
 # ============================================================
-# TEXT HELPERS
+# AI OUTPUT CLEANING
 # ============================================================
 
-def append_text(
-    old_text,
-    new_text,
-):
-
-    old_text = (
-        old_text or ""
-    ).strip()
-
-    new_text = (
-        new_text or ""
-    ).strip()
-
-    if not new_text:
-        return old_text
-
-    if not old_text:
-        return new_text
-
-    return (
-        old_text
-        + "\n"
-        + new_text
-    )
-
-
-def audio_signature(audio):
-
-    if audio is None:
-        return ""
-
-    try:
-
-        audio_bytes = audio.getvalue()
-
-        return hashlib.md5(
-            audio_bytes
-        ).hexdigest()
-
-    except Exception:
-
-        return ""
-
-
-def clean_markup(text):
+def clean_ai_output(text):
 
     if not text:
+
         return ""
 
+    text = text.strip()
+
     text = re.sub(
-        r"```(?:text|markdown)?",
+        r"^```(?:markdown|text|txt)?\s*",
         "",
         text,
         flags=re.IGNORECASE,
     )
 
-    text = text.replace(
-        "```",
+    text = re.sub(
+        r"\s*```$",
         "",
+        text,
     )
 
     return text.strip()
+
+
+# ============================================================
+# GROQ
+# ============================================================
+
+def call_groq(prompt):
+
+    client = get_groq_client()
+
+    if client is None:
+
+        return None
+
+    try:
+
+        response = client.chat.completions.create(
+
+            model=GROQ_MODEL,
+
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional official "
+                        "document drafting assistant. "
+                        "Use only information supplied by "
+                        "the user. Never invent facts."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+
+            temperature=0.2,
+        )
+
+        return clean_ai_output(
+            response.choices[0].message.content
+        )
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# GEMINI FALLBACK
+# ============================================================
+
+def call_gemini(prompt):
+
+    api_key = get_secret(
+        "GEMINI_API_KEY"
+    )
+
+    if not api_key:
+
+        return None
+
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+        f"?key={api_key}"
+    )
+
+    payload = {
+
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+
+        "generationConfig": {
+            "temperature": 0.2
+        },
+    }
+
+    try:
+
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=60,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        text = (
+            data
+            .get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+
+        return clean_ai_output(
+            text
+        )
+
+    except Exception:
+
+        return None
+
+
+def ask_ai(prompt):
+
+    result = call_groq(
+        prompt
+    )
+
+    if result:
+
+        return result
+
+
+    result = call_gemini(
+        prompt
+    )
+
+    if result:
+
+        return result
+
+
+    return None
 
 
 # ============================================================
@@ -535,682 +570,498 @@ def transcribe_audio(audio_file):
 
     if client is None:
 
-        return (
-            None,
-            "Groq API key is not configured.",
+        st.error(
+            "GROQ_API_KEY is not configured."
         )
+
+        return ""
+
 
     try:
 
-        audio_bytes = audio_file.getvalue()
-
-        if not audio_bytes:
-
-            return (
-                None,
-                "No audio was recorded.",
-            )
-
-        audio_buffer = io.BytesIO(
-            audio_bytes
-        )
-
-        audio_buffer.name = (
-            "voice_input.wav"
+        audio_bytes = (
+            audio_file.getvalue()
         )
 
         transcription = (
             client.audio.transcriptions.create(
-                file=audio_buffer,
+                file=(
+                    "recording.wav",
+                    audio_bytes,
+                    "audio/wav",
+                ),
                 model=WHISPER_MODEL,
-                response_format="text",
             )
         )
 
-        if hasattr(
-            transcription,
-            "text",
-        ):
-
-            text = transcription.text
-
-        else:
-
-            text = str(
-                transcription
-            )
-
-        return (
-            text.strip(),
-            None,
-        )
+        return transcription.text.strip()
 
     except Exception as e:
 
-        return (
-            None,
-            f"Voice transcription failed: {e}",
+        st.error(
+            f"Voice transcription failed: {e}"
         )
 
+        return ""
+
 
 # ============================================================
-# AI GENERATION
+# EMAIL GENERATION
 # ============================================================
 
-def generate_ai(
-    system_prompt,
-    user_prompt,
+def generate_email(
+    instruction
 ):
 
-    groq_client = get_groq_client()
+    prompt = f"""
+Draft a professional official email based ONLY on
+the user's instructions.
 
-    # --------------------------------------------------------
-    # GROQ
-    # --------------------------------------------------------
+USER INSTRUCTIONS:
 
-    if groq_client:
+{instruction}
 
-        try:
+Rules:
 
-            response = (
-                groq_client.chat.completions.create(
-                    model=GROQ_MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_prompt,
-                        },
-                        {
-                            "role": "user",
-                            "content": user_prompt,
-                        },
-                    ],
-                    temperature=0.2,
-                )
-            )
+1. Use professional official English.
+2. Correct spelling, grammar and punctuation.
+3. Correct obvious voice-transcription mistakes.
+4. Preserve the user's intended meaning.
+5. Do not invent facts.
+6. Do not invent names, dates, reference numbers,
+   allegations, events or decisions.
+7. Do not create a sender signature.
+8. The application will append the official profile.
+9. Return only the email body.
+"""
 
-            return clean_markup(
-                response.choices[
-                    0
-                ].message.content
-            )
-
-        except Exception as groq_error:
-
-            groq_error_text = str(
-                groq_error
-            )
-
-    else:
-
-        groq_error_text = (
-            "Groq API key not configured."
-        )
-
-    # --------------------------------------------------------
-    # GEMINI FALLBACK
-    # --------------------------------------------------------
-
-    gemini_key = get_secret(
-        "GEMINI_API_KEY"
+    return ask_ai(
+        prompt
     )
 
-    if gemini_key:
 
-        try:
+# ============================================================
+# LETTER GENERATION
+# ============================================================
 
-            url = (
-                "https://generativelanguage.googleapis.com/"
-                "v1beta/models/"
-                f"{GEMINI_MODEL}:generateContent"
-                f"?key={gemini_key}"
-            )
+def generate_letter(
+    instruction
+):
 
-            payload = {
+    prompt = f"""
+Draft a professional official letter based ONLY on
+the user's instructions.
 
-                "system_instruction": {
-                    "parts": [
-                        {
-                            "text": system_prompt
-                        }
-                    ]
-                },
+USER INSTRUCTIONS:
 
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": user_prompt
-                            }
-                        ]
-                    }
-                ],
+{instruction}
 
-                "generationConfig": {
-                    "temperature": 0.2
-                },
+Rules:
+
+1. Use professional official English.
+2. Correct spelling, grammar and punctuation.
+3. Correct obvious voice-transcription mistakes.
+4. Preserve the user's intended meaning.
+5. Do not invent facts.
+6. Do not invent names, dates, reference numbers,
+   allegations, events or decisions.
+7. Do not create a sender signature.
+8. The application will append the official profile.
+9. Return only the letter content.
+"""
+
+    return ask_ai(
+        prompt
+    )
+
+
+# ============================================================
+# INQUIRY INDEX MANAGEMENT
+# ============================================================
+
+def next_index_number(
+    index_name
+):
+
+    current = (
+        st.session_state
+        .inquiry_index_counter
+        .get(
+            index_name,
+            0,
+        )
+    )
+
+    current += 1
+
+    st.session_state\
+        .inquiry_index_counter[
+            index_name
+        ] = current
+
+    return current
+
+
+def add_inquiry_index(
+    index_name
+):
+
+    number = next_index_number(
+        index_name
+    )
+
+    unique_id = (
+        f"{index_name}-{number}-"
+        f"{datetime.now().timestamp()}"
+    )
+
+    st.session_state\
+        .inquiry_indexes.append(
+            {
+                "name": index_name,
+                "number": number,
+                "id": unique_id,
             }
-
-            response = requests.post(
-                url,
-                json=payload,
-                timeout=120,
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            text = (
-                data[
-                    "candidates"
-                ][0][
-                    "content"
-                ][
-                    "parts"
-                ][0]["text"]
-            )
-
-            return clean_markup(
-                text
-            )
-
-        except Exception as gemini_error:
-
-            raise RuntimeError(
-                "Both AI services failed.\n\n"
-                f"Groq: {groq_error_text}\n"
-                f"Gemini: {gemini_error}"
-            )
-
-    raise RuntimeError(
-        "No AI API is available. "
-        "Please configure GROQ_API_KEY "
-        "or GEMINI_API_KEY."
-    )
-
-
-# ============================================================
-# AI RULES
-# ============================================================
-
-LANGUAGE_RULES = """
-Write in professional, formal and clear official English.
-
-Correct:
-- spelling
-- grammar
-- punctuation
-- obvious transcription mistakes
-- sentence structure
-
-Preserve the user's intended meaning.
-
-DO NOT invent:
-- names
-- dates
-- allegations
-- evidence
-- witnesses
-- findings
-- recommendations
-- reference numbers
-- events
-- facts
-
-If information is missing, do not fabricate it.
-
-For statements of accused persons or witnesses,
-preserve the actual meaning of their statements.
-
-Do not introduce unsupported facts.
-"""
-
-
-NORMAL_SYSTEM_PROMPT = f"""
-You are an AI assistant for drafting official correspondence.
-
-{LANGUAGE_RULES}
-
-Prepare professional official documents suitable
-for government/organizational communication.
-
-Do not add a sender signature because the application
-will automatically add the user's official information.
-"""
-
-
-ED_SYSTEM_PROMPT = f"""
-You are an expert assistant for preparing
-departmental inquiry reports.
-
-{LANGUAGE_RULES}
-
-Organize the supplied information into a professional
-departmental inquiry report.
-
-Do not invent missing evidence or findings.
-
-Where information is provided as a short note,
-convert it into proper official language without
-changing its meaning.
-
-Do not add an inquiry committee or documents recorded
-unless they are actually supplied.
-
-For every "Questions / Answers with the Accused"
-section, format the questions and answers as a
-Markdown table using exactly two columns:
-
-| Questions | Answers |
-|---|---|
-| 1. Question | Answer |
-| 2. Question | Answer |
-
-Every question and its corresponding answer must
-occupy the same row.
-
-If an answer is not supplied, do not invent one.
-"""
-
-
-# ============================================================
-# E&D INDEX MANAGEMENT
-# ============================================================
-
-def add_ed_index(
-    index_name,
-):
-
-    instance_id = (
-        len(
-            st.session_state.ed_instances
         )
-        + 1
-    )
-
-    st.session_state.ed_instances.append(
-        {
-            "id": instance_id,
-            "index": index_name,
-            "text": "",
-            "audio_seen": "",
-        }
-    )
 
 
-def remove_ed_index(
-    instance_id,
+def remove_inquiry_index(
+    index_id
 ):
 
-    st.session_state.ed_instances = [
+    st.session_state\
+        .inquiry_indexes = [
+
         item
-        for item in st.session_state.ed_instances
-        if item["id"] != instance_id
+
+        for item in
+        st.session_state.inquiry_indexes
+
+        if item["id"] != index_id
     ]
 
 
-def get_occurrence(
-    index_name,
-    instance_id,
-):
-
-    occurrence = 0
-
-    for item in (
-        st.session_state.ed_instances
-    ):
-
-        if item["index"] == index_name:
-
-            occurrence += 1
-
-            if item["id"] == instance_id:
-
-                return occurrence
-
-    return 1
-
-
-def get_display_heading(
-    index_name,
-    occurrence,
-):
-
-    if occurrence <= 1:
-
-        return index_name
-
-    return (
-        f"{index_name} No. "
-        f"{occurrence}"
-    )
-
-
 # ============================================================
-# NORMAL COMPOSER
+# VOICE + TEXT INPUT
 # ============================================================
 
-def render_composer(
-    prefix,
-    title,
+def render_voice_text_input(
+    label,
+    text_key,
+    audio_key,
+    height=180,
 ):
 
     st.markdown(
-        f"#### {title}"
+        f"**{label}**"
     )
 
-    st.caption(
-        "Type naturally or tap 🎙️ to record. "
-        "Voice transcription is added to the same input."
-    )
+    # --------------------------------------------------------
+    # MICROPHONE FIRST
+    # --------------------------------------------------------
 
     audio = st.audio_input(
-        "🎙️ Record Voice",
-        key=f"{prefix}_audio",
-    )
-
-    if audio is not None:
-
-        signature = audio_signature(
-            audio
-        )
-
-        seen_key = (
-            f"{prefix}_audio_seen"
-        )
-
-        if (
-            signature
-            and signature
-            != st.session_state.get(
-                seen_key,
-                "",
-            )
-        ):
-
-            with st.spinner(
-                "Transcribing voice..."
-            ):
-
-                transcript, error = (
-                    transcribe_audio(
-                        audio
-                    )
-                )
-
-            if error:
-
-                st.error(error)
-
-            elif transcript:
-
-                current = (
-                    st.session_state.get(
-                        f"{prefix}_input",
-                        "",
-                    )
-                )
-
-                st.session_state[
-                    f"{prefix}_input"
-                ] = append_text(
-                    current,
-                    transcript,
-                )
-
-                st.session_state[
-                    seen_key
-                ] = signature
-
-    return st.text_area(
-        "Instructions / Information",
-        key=f"{prefix}_input",
-        height=160,
-        placeholder=(
-            "Type information naturally here, "
-            "or use the microphone above."
-        ),
-        label_visibility="collapsed",
-    )
-
-
-# ============================================================
-# E&D NORMAL INPUT
-# ============================================================
-
-def render_ed_input(
-    item,
-):
-
-    instance_id = item["id"]
-
-    index_name = item["index"]
-
-    occurrence = get_occurrence(
-        index_name,
-        instance_id,
-    )
-
-    heading = get_display_heading(
-        index_name,
-        occurrence,
-    )
-
-    st.markdown(
-        f"""
-        <div class="index-card">
-        <strong>{heading}</strong>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    audio_key = (
-        f"ed_audio_{instance_id}"
-    )
-
-    text_key = (
-        f"ed_text_{instance_id}"
-    )
-
-    seen_key = (
-        f"ed_audio_seen_{instance_id}"
-    )
-
-    audio = st.audio_input(
-        "🎙️ Record Voice",
+        "🎤 Record Voice",
         key=audio_key,
     )
 
     if audio is not None:
 
-        signature = audio_signature(
+        transcript = transcribe_audio(
             audio
         )
 
-        if (
-            signature
-            and signature
-            != st.session_state.get(
-                seen_key,
-                "",
+        if transcript:
+
+            current = (
+                st.session_state.get(
+                    text_key,
+                    "",
+                )
             )
-        ):
 
-            with st.spinner(
-                "Transcribing voice..."
-            ):
-
-                transcript, error = (
-                    transcribe_audio(
-                        audio
-                    )
-                )
-
-            if error:
-
-                st.error(error)
-
-            elif transcript:
-
-                current = (
-                    st.session_state.get(
-                        text_key,
-                        item.get(
-                            "text",
-                            "",
-                        ),
-                    )
-                )
+            if current.strip():
 
                 st.session_state[
                     text_key
-                ] = append_text(
-                    current,
-                    transcript,
+                ] = (
+                    current.rstrip()
+                    + "\n"
+                    + transcript
                 )
+
+            else:
 
                 st.session_state[
-                    seen_key
-                ] = signature
+                    text_key
+                ] = transcript
+
+
+    # --------------------------------------------------------
+    # TEXT
+    # --------------------------------------------------------
 
     text = st.text_area(
-        "Information",
+        "Type or review your instructions",
         key=text_key,
-        height=150,
-        placeholder=(
-            "Type information naturally here, "
-            "or use the microphone above."
-        ),
+        height=height,
+        label_visibility="collapsed",
     )
 
-    item["text"] = text
+    return text
 
 
 # ============================================================
-# DOCUMENTS RECORDED
+# RENDER E&D INDEX
 # ============================================================
 
-def render_documents_recorded():
+def render_index_input(
+    index_item
+):
+
+    name = index_item[
+        "name"
+    ]
+
+    number = index_item[
+        "number"
+    ]
+
+    unique_id = index_item[
+        "id"
+    ]
+
+
+    heading = name
+
+    if number > 1:
+
+        heading += (
+            f" — No. {number}"
+        )
+
 
     st.markdown(
-        "### 📋 Documents Recorded"
+        f"### {heading}"
     )
 
-    st.caption(
-        "Select only the documents or records "
-        "actually examined or recorded."
-    )
 
-    selected = []
+    # ========================================================
+    # DOCUMENTS RECORDED
+    # ========================================================
 
-    columns = st.columns(2)
+    if name == "Documents Recorded":
 
-    for i, document in enumerate(
-        DOCUMENTS_RECORDED
-    ):
+        st.info(
+            "Select the documents that are part of the "
+            "inquiry record. The application will automatically "
+            "assign annexures as Annex-A, Annex-B, Annex-C "
+            "and so on."
+        )
 
-        with columns[
-            i % 2
-        ]:
+        selected = st.multiselect(
 
-            checked = st.checkbox(
-                document,
-                key=f"doc_recorded_{i}",
+            "Select Documents Recorded",
+
+            DOCUMENTS_RECORDED,
+
+            key=(
+                f"documents_"
+                f"{unique_id}"
+            ),
+        )
+
+
+        other = st.text_input(
+
+            "Other document, if any",
+
+            key=(
+                f"documents_other_"
+                f"{unique_id}"
+            ),
+        )
+
+
+        # ----------------------------------------------------
+        # AUTOMATIC ANNEXURE PREVIEW
+        # ----------------------------------------------------
+
+        annexure_items = list(
+            selected
+        )
+
+        if other.strip():
+
+            annexure_items.append(
+                other.strip()
             )
 
-            if checked:
 
-                selected.append(
-                    document
+        if annexure_items:
+
+            st.markdown(
+                "**Automatic Annexure Numbering**"
+            )
+
+
+            for idx, document in enumerate(
+                annexure_items
+            ):
+
+                annexure_letter = (
+                    chr(
+                        65 + idx
+                    )
                 )
 
-    return selected
+                st.write(
+                    f"{idx + 1}. "
+                    f"{document} — "
+                    f"**Annex-{annexure_letter}**"
+                )
 
 
-# ============================================================
-# INQUIRY COMMITTEE
-# ============================================================
+        return {
 
-def render_committee():
+            "type": "documents",
 
-    st.markdown(
-        "### 👥 Inquiry Committee"
-    )
+            "selected": selected,
 
-    st.caption(
-        "Enter the details of the officers/members "
-        "constituting the inquiry committee."
-    )
+            "other": other,
 
-    committee = {}
-
-    for index, role in enumerate(
-        COMMITTEE_ROLES
-    ):
-
-        st.markdown(
-            f"#### {role}"
-        )
-
-        col1, col2, col3 = st.columns(
-            3
-        )
-
-        with col1:
-
-            erp = st.text_input(
-                "ERP#",
-                key=f"committee_erp_{index}",
-            )
-
-        with col2:
-
-            name = st.text_input(
-                "Name",
-                key=f"committee_name_{index}",
-            )
-
-        with col3:
-
-            designation = st.text_input(
-                "Designation",
-                key=f"committee_designation_{index}",
-            )
-
-        committee[role] = {
-            "erp": erp.strip(),
-            "name": name.strip(),
-            "designation": designation.strip(),
         }
 
-    return committee
+
+    # ========================================================
+    # INQUIRY COMMITTEE
+    # ========================================================
+
+    if name == "Inquiry Committee":
+
+        committee_data = {}
+
+
+        for role in COMMITTEE_ROLES:
+
+            st.markdown(
+                f"**{role}**"
+            )
+
+            col1, col2, col3 = (
+                st.columns(3)
+            )
+
+
+            with col1:
+
+                erp = st.text_input(
+                    "ERP#",
+                    key=(
+                        f"erp_"
+                        f"{unique_id}_"
+                        f"{role}"
+                    ),
+                )
+
+
+            with col2:
+
+                member_name = st.text_input(
+                    "Name",
+                    key=(
+                        f"name_"
+                        f"{unique_id}_"
+                        f"{role}"
+                    ),
+                )
+
+
+            with col3:
+
+                designation = st.text_input(
+                    "Designation",
+                    key=(
+                        f"designation_"
+                        f"{unique_id}_"
+                        f"{role}"
+                    ),
+                )
+
+
+            committee_data[
+                role
+            ] = {
+
+                "erp": erp,
+
+                "name": member_name,
+
+                "designation": designation,
+
+            }
+
+
+        return {
+
+            "type": "committee",
+
+            "data": committee_data,
+
+        }
+
+
+    # ========================================================
+    # NORMAL INDEX
+    # ========================================================
+
+    text_key = (
+        f"inquiry_text_"
+        f"{unique_id}"
+    )
+
+    audio_key = (
+        f"inquiry_audio_"
+        f"{unique_id}"
+    )
+
+
+    text = render_voice_text_input(
+
+        f"Instructions / Information for {name}",
+
+        text_key,
+
+        audio_key,
+
+    )
+
+
+    return {
+
+        "type": "text",
+
+        "text": text,
+
+    }
 
 
 # ============================================================
-# Q&A DETECTION
+# QA DETECTION
 # ============================================================
 
 def is_qa_heading(
-    line,
+    line
 ):
 
     normalized = (
-        line.strip()
-        .lower()
+        line.strip().lower()
     )
 
-    return (
-        normalized.startswith(
-            QA_INDEX_PREFIX.lower()
-        )
+    return normalized.startswith(
+        QA_INDEX_PREFIX.lower()
     )
 
-
-# ============================================================
-# PARSE MARKDOWN TABLE
-# ============================================================
 
 def parse_markdown_table(
     lines,
@@ -1221,23 +1072,29 @@ def parse_markdown_table(
 
     i = start_index
 
+
     while i < len(lines):
 
         line = lines[i].strip()
+
 
         if not line.startswith("|"):
 
             break
 
+
         cells = [
+
             cell.strip()
-            for cell in line.strip(
-                "|"
-            ).split("|")
+
+            for cell in
+            line.strip("|").split("|")
+
         ]
 
-        # Header separator row.
+
         if all(
+
             re.fullmatch(
                 r":?-+:?",
                 cell.replace(
@@ -1245,11 +1102,15 @@ def parse_markdown_table(
                     "",
                 ),
             )
+
             for cell in cells
+
         ):
 
             i += 1
+
             continue
+
 
         if len(cells) >= 2:
 
@@ -1260,7 +1121,9 @@ def parse_markdown_table(
                 )
             )
 
+
         i += 1
+
 
     return (
         table_rows,
@@ -1269,392 +1132,437 @@ def parse_markdown_table(
 
 
 # ============================================================
-# RENDER DOCUMENT FOR SCREEN
-# ============================================================
-
-def render_document_markdown(
-    text,
-):
-
-    if not text:
-
-        return
-
-    lines = text.splitlines()
-
-    i = 0
-
-    while i < len(lines):
-
-        line = lines[i].strip()
-
-        if (
-            is_qa_heading(line)
-            and i + 1 < len(lines)
-            and lines[i + 1].strip().startswith("|")
-        ):
-
-            st.markdown(
-                f"### {line}"
-            )
-
-            rows, next_index = (
-                parse_markdown_table(
-                    lines,
-                    i + 1,
-                )
-            )
-
-            if rows:
-
-                table_markdown = (
-                    "| Questions | Answers |\n"
-                    "|---|---|\n"
-                )
-
-                for question, answer in rows:
-
-                    table_markdown += (
-                        f"| {question} | {answer} |\n"
-                    )
-
-                st.markdown(
-                    table_markdown
-                )
-
-                i = next_index
-                continue
-
-        # Normal paragraph/heading.
-        if line:
-
-            st.markdown(
-                line
-            )
-
-        else:
-
-            st.write("")
-
-        i += 1
-
-
-# ============================================================
-# GENERATE EMAIL
-# ============================================================
-
-def generate_email():
-
-    recipient = st.session_state.get(
-        "email_recipient",
-        "",
-    )
-
-    subject = st.session_state.get(
-        "email_subject",
-        "",
-    )
-
-    instructions = st.session_state.get(
-        "email_input",
-        "",
-    )
-
-    prompt = f"""
-Prepare a professional official email.
-
-Recipient:
-{recipient}
-
-Subject:
-{subject}
-
-User's instructions/information:
-{instructions}
-
-Requirements:
-
-- Use an appropriate professional email structure.
-- Correct grammar and spelling.
-- Preserve all facts.
-- Do not invent information.
-- Do not include the sender's name,
-  designation, contact number or current station.
-- The application will automatically append
-  the sender's official information at the end.
-"""
-
-    draft = generate_ai(
-        NORMAL_SYSTEM_PROMPT,
-        prompt,
-    )
-
-    return append_profile_signature(
-        draft
-    )
-
-
-# ============================================================
-# GENERATE LETTER
-# ============================================================
-
-def generate_letter():
-
-    recipient = st.session_state.get(
-        "letter_recipient",
-        "",
-    )
-
-    subject = st.session_state.get(
-        "letter_subject",
-        "",
-    )
-
-    instructions = st.session_state.get(
-        "letter_input",
-        "",
-    )
-
-    prompt = f"""
-Prepare a professional official letter.
-
-Recipient:
-{recipient}
-
-Subject:
-{subject}
-
-User's instructions/information:
-{instructions}
-
-Requirements:
-
-- Use a formal official letter structure.
-- Correct grammar and spelling.
-- Preserve all facts.
-- Do not invent information.
-- Do not include the sender's name,
-  designation, contact number or current station.
-- The application will automatically append
-  the sender's official information at the end.
-"""
-
-    draft = generate_ai(
-        NORMAL_SYSTEM_PROMPT,
-        prompt,
-    )
-
-    return append_profile_signature(
-        draft
-    )
-
-
-# ============================================================
-# GENERATE E&D INQUIRY
+# E&D REPORT GENERATION
 # ============================================================
 
 def generate_ed_report(
-    reference_no,
-    documents_recorded,
-    committee,
+    index_data
 ):
 
-    # --------------------------------------------------------
-    # NORMAL INDEXES
-    # --------------------------------------------------------
+    normal_parts = []
 
-    information_parts = []
 
-    for item in (
-        st.session_state.ed_instances
-    ):
+    for item in index_data:
 
-        index_name = item["index"]
+        name = item[
+            "name"
+        ]
 
-        # Do NOT send structured indexes
-        # as normal text.
-        if index_name in SPECIAL_INDEXES:
+
+        if name in SPECIAL_INDEXES:
 
             continue
+
 
         text = item.get(
             "text",
             "",
         ).strip()
 
+
         if not text:
 
             continue
 
-        occurrence = get_occurrence(
-            index_name,
-            item["id"],
-        )
 
-        heading = get_display_heading(
-            index_name,
-            occurrence,
-        )
+        heading = name
 
-        information_parts.append(
-            f"{heading}:\n{text}"
-        )
 
-    inquiry_information = (
-        "\n\n".join(
-            information_parts
-        )
-    )
+        if item["number"] > 1:
 
-    # --------------------------------------------------------
-    # DOCUMENTS
-    # --------------------------------------------------------
-
-    documents_text = "\n".join(
-        f"- {item}"
-        for item in documents_recorded
-    )
-
-    # --------------------------------------------------------
-    # COMMITTEE
-    # --------------------------------------------------------
-
-    committee_parts = []
-
-    for role in COMMITTEE_ROLES:
-
-        details = committee.get(
-            role,
-            {},
-        )
-
-        erp = details.get(
-            "erp",
-            "",
-        )
-
-        name = details.get(
-            "name",
-            "",
-        )
-
-        designation = details.get(
-            "designation",
-            "",
-        )
-
-        if (
-            erp
-            or name
-            or designation
-        ):
-
-            committee_parts.append(
-                f"{role}: "
-                f"ERP# {erp}; "
-                f"Name: {name}; "
-                f"Designation: {designation}"
+            heading += (
+                f" No. {item['number']}"
             )
 
-    committee_text = "\n".join(
-        committee_parts
+
+        normal_parts.append(
+
+            f"""
+INDEX:
+{heading}
+
+USER INFORMATION:
+{text}
+"""
+        )
+
+
+    normal_information = (
+        "\n".join(
+            normal_parts
+        )
     )
 
+
+    # ========================================================
+    # DOCUMENTS
+    # ========================================================
+
+    documents = []
+
+
+    for item in index_data:
+
+        if (
+            item["name"]
+            == "Documents Recorded"
+        ):
+
+            documents.extend(
+                item.get(
+                    "selected",
+                    [],
+                )
+            )
+
+
+            other = item.get(
+                "other",
+                "",
+            ).strip()
+
+
+            if other:
+
+                documents.append(
+                    other
+                )
+
+
     # --------------------------------------------------------
-    # PROMPT
+    # AUTOMATIC ANNEXURES
     # --------------------------------------------------------
+
+    annexure_lines = []
+
+
+    for idx, document in enumerate(
+        documents
+    ):
+
+        letter = chr(
+            65 + idx
+        )
+
+        annexure_lines.append(
+
+            f"{idx + 1}. "
+            f"{document} — "
+            f"Annex-{letter}"
+        )
+
+
+    documents_text = (
+
+        "\n".join(
+            annexure_lines
+        )
+
+        if annexure_lines
+
+        else
+        "No documents were specified."
+
+    )
+
+
+    # ========================================================
+    # COMMITTEE
+    # ========================================================
+
+    committee_lines = []
+
+
+    for item in index_data:
+
+        if (
+            item["name"]
+            == "Inquiry Committee"
+        ):
+
+            committee = item.get(
+                "data",
+                {},
+            )
+
+
+            for role in COMMITTEE_ROLES:
+
+                member = committee.get(
+                    role,
+                    {},
+                )
+
+
+                erp = member.get(
+                    "erp",
+                    "",
+                ).strip()
+
+
+                name = member.get(
+                    "name",
+                    "",
+                ).strip()
+
+
+                designation = member.get(
+                    "designation",
+                    "",
+                ).strip()
+
+
+                if (
+                    erp
+                    or name
+                    or designation
+                ):
+
+                    committee_lines.append(
+
+                        f"{role}: "
+                        f"ERP# {erp}; "
+                        f"Name: {name}; "
+                        f"Designation: "
+                        f"{designation}"
+                    )
+
+
+    committee_text = (
+
+        "\n".join(
+            committee_lines
+        )
+
+        if committee_lines
+
+        else
+        "No committee members were specified."
+
+    )
+
+
+    # ========================================================
+    # AI PROMPT
+    # ========================================================
 
     prompt = f"""
-Prepare a professional Departmental Inquiry Report.
+Prepare a professional E&D Inquiry Report from the
+information supplied by the user.
 
-Inquiry Reference No.:
-{reference_no}
+IMPORTANT RULES:
 
-Information supplied for the inquiry:
-{inquiry_information}
+1. Use professional official English.
+2. Correct grammar, spelling and punctuation.
+3. Correct obvious voice-transcription mistakes.
+4. Preserve the user's intended meaning.
+5. NEVER invent facts.
+6. NEVER invent names, dates, allegations, witnesses,
+   evidence, findings or recommendations.
+7. Do not assume missing information.
+8. Preserve accused and witness statements in meaning.
+9. Organize the report using appropriate headings.
 
-Documents Recorded:
-{documents_text if documents_text else "None specified."}
+DOCUMENTS RECORDED:
 
-Inquiry Committee:
-{committee_text if committee_text else "Not specified."}
+The following documents were explicitly selected by the user:
 
-IMPORTANT REQUIREMENTS:
+{documents_text}
 
-1. Use only the information supplied.
+The application has already assigned the annexures.
 
-2. Do not invent facts.
+You MUST preserve the exact annexure labels supplied above.
 
-3. Correct spelling and grammar.
+Do NOT renumber them.
 
-4. Preserve statements of the accused.
+Do NOT change Annex-A to Annex-1.
 
-5. Preserve the meaning of witness statements.
+The annexures MUST remain:
 
-6. Do not create allegations, evidence, findings,
-   recommendations or conclusions that were not supplied.
-
-7. Do not duplicate any section.
-
-8. Documents Recorded must appear ONLY ONCE.
-
-9. Inquiry Committee must appear ONLY ONCE.
-
-10. If multiple instances of an index are supplied,
-    retain each instance separately.
-
-11. Use professional official language.
-
-12. Include the inquiry reference number near the beginning.
-
-13. Include the current date.
-
-14. Do not add commentary about how the report was created.
-
-15. QUESTIONS AND ANSWERS:
-
-For every section titled:
-
-Questions / Answers with the Accused
-Questions / Answers with the Accused No. 2
-Questions / Answers with the Accused No. 3
+Annex-A
+Annex-B
+Annex-C
 etc.
 
-you MUST format the content as a Markdown table.
+Documents Recorded must appear ONLY ONCE.
 
-Use exactly:
+Use the following format:
+
+Documents Recorded
+
+1. Statement of Accused — Annex-A
+2. Statement of Witness — Annex-B
+3. Complaint / Application — Annex-C
+
+Only include documents actually supplied by the user.
+
+INQUIRY COMMITTEE:
+
+{committee_text}
+
+Inquiry Committee must appear ONLY ONCE.
+
+Do not create an additional empty Inquiry Committee section.
+
+SPECIAL QUESTION / ANSWER REQUIREMENT:
+
+Whenever the report contains:
+
+Questions / Answers with the Accused
+
+or repeated versions such as:
+
+Questions / Answers with the Accused No. 2
+Questions / Answers with the Accused No. 3
+
+format the questions and answers as a two-column
+Markdown table:
 
 | Questions | Answers |
 |---|---|
 | 1. Question | Answer |
 | 2. Question | Answer |
-| 3. Question | Answer |
 
-Each question and its corresponding answer must
-be in the SAME ROW.
+The first row MUST contain:
 
-Do not put all questions in one cell.
+Questions | Answers
 
-Do not put all answers in one cell.
+Do not merge questions and answers into one column.
 
-If there is no answer supplied for a question,
-do not invent an answer.
+Do not invent answers.
 
-16. Do not use a table for any other section.
+USER-SUPPLIED INDEX INFORMATION:
 
-17. Return only the final inquiry report.
+{normal_information}
+
+Return only the final inquiry report.
 """
 
-    draft = generate_ai(
-        ED_SYSTEM_PROMPT,
-        prompt,
-    )
 
-    return draft
+    return ask_ai(
+        prompt
+    )
 
 
 # ============================================================
-# MODIFY GENERATED DOCUMENT
+# PROFILE FUNCTIONS
+# ============================================================
+
+def update_profile_from_widgets():
+
+    profile = {
+
+        "name":
+        st.session_state.profile_name.strip(),
+
+        "designation":
+        st.session_state.profile_designation.strip(),
+
+        "contact_no":
+        st.session_state.profile_contact.strip(),
+
+        "current_station":
+        st.session_state.profile_station.strip(),
+
+    }
+
+
+    st.session_state.profile = (
+        profile
+    )
+
+
+    save_user_profile(
+        profile
+    )
+
+
+    return profile
+
+
+def profile_complete():
+
+    profile = (
+        st.session_state.profile
+    )
+
+    return all(
+
+        [
+
+            profile.get(
+                "name",
+                "",
+            ).strip(),
+
+            profile.get(
+                "designation",
+                "",
+            ).strip(),
+
+            profile.get(
+                "contact_no",
+                "",
+            ).strip(),
+
+            profile.get(
+                "current_station",
+                "",
+            ).strip(),
+
+        ]
+
+    )
+
+
+# ============================================================
+# HISTORY
+# ============================================================
+
+def save_to_history(
+    document_type,
+    content,
+):
+
+    if not content:
+
+        return
+
+
+    item = {
+
+        "type":
+        document_type,
+
+        "date":
+        datetime.now().strftime(
+            "%Y-%m-%d %H:%M"
+        ),
+
+        "content":
+        content,
+
+    }
+
+
+    history = (
+        st.session_state.history
+    )
+
+
+    history.insert(
+        0,
+        item,
+    )
+
+
+    st.session_state.history = (
+        history[:20]
+    )
+
+
+# ============================================================
+# MODIFY DOCUMENT WITH AI
 # ============================================================
 
 def modify_generated_document(
@@ -1663,655 +1571,140 @@ def modify_generated_document(
 ):
 
     prompt = f"""
-You are editing an already generated official document.
+Modify the following official document according to
+the user's requested changes.
+
+USER REQUEST:
+
+{instruction}
 
 CURRENT DOCUMENT:
-----------------
+
 {current_document}
-----------------
-
-USER'S REQUESTED CHANGE:
-------------------------
-{instruction}
-------------------------
-
-Apply ONLY the requested changes.
 
 Rules:
 
-1. Preserve all existing facts.
-
-2. Do not invent names, dates, evidence,
-   allegations, witnesses, findings,
-   recommendations or events.
-
-3. Do not remove important information unless
-   the user explicitly asks for removal.
-
-4. Correct grammar and spelling where appropriate.
-
-5. Maintain professional official language.
-
-6. Keep the document structure professional.
-
-7. If a Questions / Answers with the Accused
-   section exists, preserve its table structure.
-
-8. Every Q&A table must have exactly two columns:
+1. Preserve existing facts.
+2. Do not invent facts.
+3. Do not invent names, dates, allegations, evidence,
+   findings or recommendations.
+4. Make only the requested changes.
+5. Maintain professional official English.
+6. Correct grammar and punctuation where appropriate.
+7. Preserve factual meaning.
+8. If the document contains Questions / Answers,
+   retain this exact format:
 
 | Questions | Answers |
 |---|---|
+| 1. Question | Answer |
+| 2. Question | Answer |
 
-9. Keep each question and corresponding answer
-   in the same row.
-
-10. Do not convert a Q&A table into ordinary paragraphs.
-
-11. Return ONLY the revised document.
+9. If the document contains annexures, preserve
+the labels Annex-A, Annex-B, Annex-C etc.
+10. Return the complete modified document.
 """
 
-    return generate_ai(
-        NORMAL_SYSTEM_PROMPT,
-        prompt,
+
+    return ask_ai(
+        prompt
     )
 
 
 # ============================================================
-# PDF HELPERS
+# DOCUMENT PREVIEW
 # ============================================================
 
-def pdf_clean(text):
-
-    replacements = {
-
-        "–": "-",
-
-        "—": "-",
-
-        "’": "'",
-
-        "‘": "'",
-
-        "“": '"',
-
-        "”": '"',
-
-        "•": "-",
-
-        " ": " ",
-    }
-
-    for old, new in replacements.items():
-
-        text = text.replace(
-            old,
-            new,
-        )
-
-    return text
-
-
-def is_heading(
-    line,
+def display_generated_document(
+    text
 ):
 
-    line = line.strip()
-
-    if not line:
-
-        return False
-
-    headings = [
-
-        "DEPARTMENTAL INQUIRY REPORT",
-
-        "Inquiry Reference No.",
-
-        "Subject",
-
-        "Brief of the Inquiry",
-
-        "Articles of Charge / Allegations",
-
-        "Statement of the Accused",
-
-        "Questions / Answers with the Accused",
-
-        "Statements of Witnesses / Officials",
-
-        "Documentary Evidence / Record Examined",
-
-        "Defence / Written Explanation",
-
-        "Findings",
-
-        "Findings on Each Charge",
-
-        "Discussion / Analysis",
-
-        "Conclusion",
-
-        "Recommendations",
-
-        "Documents Recorded",
-
-        "Inquiry Committee",
-    ]
-
-    for heading in headings:
-
-        if line.lower().startswith(
-            heading.lower()
-        ):
-
-            return True
-
-    return False
-
-
-def wrap_pdf_line(
-    pdf,
-    text,
-    width,
-):
-
-    words = text.split()
-
-    if not words:
-
-        pdf.ln(5)
+    if not text:
 
         return
 
-    current = ""
-
-    for word in words:
-
-        test = (
-            current
-            + " "
-            + word
-        ).strip()
-
-        if pdf.get_string_width(
-            test
-        ) <= width:
-
-            current = test
-
-        else:
-
-            if current:
-
-                pdf.cell(
-                    0,
-                    6,
-                    current,
-                    ln=1,
-                )
-
-            current = word
-
-    if current:
-
-        pdf.cell(
-            0,
-            6,
-            current,
-            ln=1,
-        )
-
-
-# ============================================================
-# PDF Q&A TABLE
-# ============================================================
-
-def draw_pdf_qa_table(
-    pdf,
-    rows,
-):
-
-    page_width = 180
-
-    question_width = 85
-
-    answer_width = 95
-
-    # Header
-    pdf.set_font(
-        "Arial",
-        "B",
-        9,
-    )
-
-    pdf.cell(
-        question_width,
-        8,
-        "Questions",
-        border=1,
-        align="L",
-    )
-
-    pdf.cell(
-        answer_width,
-        8,
-        "Answers",
-        border=1,
-        align="L",
-        ln=1,
-    )
-
-    pdf.set_font(
-        "Arial",
-        "",
-        9,
-    )
-
-    for question, answer in rows:
-
-        question = pdf_clean(
-            question
-        )
-
-        answer = pdf_clean(
-            answer
-        )
-
-        # Approximate row height.
-        q_words = question.split()
-        a_words = answer.split()
-
-        q_lines = max(
-            1,
-            len(q_words) // 9 + 1,
-        )
-
-        a_lines = max(
-            1,
-            len(a_words) // 11 + 1,
-        )
-
-        row_height = max(
-            6,
-            max(
-                q_lines,
-                a_lines,
-            ) * 6,
-        )
-
-        # Page break if needed.
-        if (
-            pdf.get_y()
-            + row_height
-            > 270
-        ):
-
-            pdf.add_page()
-
-            pdf.set_font(
-                "Arial",
-                "B",
-                9,
-            )
-
-            pdf.cell(
-                question_width,
-                8,
-                "Questions",
-                border=1,
-                align="L",
-            )
-
-            pdf.cell(
-                answer_width,
-                8,
-                "Answers",
-                border=1,
-                align="L",
-                ln=1,
-            )
-
-            pdf.set_font(
-                "Arial",
-                "",
-                9,
-            )
-
-        x = pdf.get_x()
-        y = pdf.get_y()
-
-        # Question cell
-        pdf.multi_cell(
-            question_width,
-            6,
-            question,
-            border=1,
-            align="L",
-        )
-
-        question_end_y = pdf.get_y()
-
-        # Reset to beginning of row.
-        pdf.set_xy(
-            x + question_width,
-            y,
-        )
-
-        pdf.multi_cell(
-            answer_width,
-            6,
-            answer,
-            border=1,
-            align="L",
-        )
-
-        answer_end_y = pdf.get_y()
-
-        final_y = max(
-            question_end_y,
-            answer_end_y,
-        )
-
-        pdf.set_xy(
-            x,
-            final_y,
-        )
-
-
-# ============================================================
-# EXPORT PDF
-# ============================================================
-
-def export_pdf(
-    text,
-):
-
-    pdf = FPDF()
-
-    pdf.set_auto_page_break(
-        auto=True,
-        margin=15,
-    )
-
-    pdf.add_page()
-
-    pdf.set_font(
-        "Arial",
-        size=10,
-    )
-
-    clean_text = pdf_clean(
-        text
-    )
-
-    lines = clean_text.splitlines()
-
-    i = 0
-
-    while i < len(lines):
-
-        line = lines[i].strip()
-
-        # ----------------------------------------------------
-        # Q&A TABLE
-        # ----------------------------------------------------
-
-        if (
-            is_qa_heading(line)
-            and i + 1 < len(lines)
-            and lines[i + 1].strip().startswith("|")
-        ):
-
-            pdf.set_font(
-                "Arial",
-                "B",
-                11,
-            )
-
-            pdf.ln(3)
-
-            wrap_pdf_line(
-                pdf,
-                line,
-                180,
-            )
-
-            rows, next_index = (
-                parse_markdown_table(
-                    lines,
-                    i + 1,
-                )
-            )
-
-            if rows:
-
-                draw_pdf_qa_table(
-                    pdf,
-                    rows,
-                )
-
-            pdf.set_font(
-                "Arial",
-                "",
-                10,
-            )
-
-            i = next_index
-
-            continue
-
-        # ----------------------------------------------------
-        # NORMAL HEADING
-        # ----------------------------------------------------
-
-        if is_heading(line):
-
-            pdf.set_font(
-                "Arial",
-                "B",
-                11,
-            )
-
-            pdf.ln(2)
-
-            wrap_pdf_line(
-                pdf,
-                line,
-                180,
-            )
-
-            pdf.set_font(
-                "Arial",
-                "",
-                10,
-            )
-
-        # ----------------------------------------------------
-        # NORMAL TEXT
-        # ----------------------------------------------------
-
-        elif line:
-
-            wrap_pdf_line(
-                pdf,
-                line,
-                180,
-            )
-
-        else:
-
-            pdf.ln(4)
-
-        i += 1
-
-    return bytes(
-        pdf.output()
-    )
-
-
-# ============================================================
-# DOCX Q&A TABLE
-# ============================================================
-
-def add_docx_qa_table(
-    document,
-    rows,
-):
-
-    table = document.add_table(
-        rows=1,
-        cols=2,
-    )
-
-    table.style = "Table Grid"
-
-    hdr = table.rows[0].cells
-
-    hdr[0].text = "Questions"
-    hdr[1].text = "Answers"
-
-    for cell in hdr:
-
-        for paragraph in cell.paragraphs:
-
-            for run in paragraph.runs:
-
-                run.bold = True
-
-    for question, answer in rows:
-
-        cells = table.add_row().cells
-
-        cells[0].text = question
-
-        cells[1].text = answer
-
-    document.add_paragraph()
-
-
-# ============================================================
-# EXPORT DOCX
-# ============================================================
-
-def export_docx(
-    text,
-):
-
-    document = Document()
-
-    normal_style = document.styles[
-        "Normal"
-    ]
-
-    normal_style.font.name = "Arial"
-
-    normal_style.font.size = Pt(
-        11
-    )
 
     lines = text.splitlines()
 
     i = 0
 
+
     while i < len(lines):
 
-        line = lines[i].strip()
+        line = lines[i]
 
-        # ----------------------------------------------------
-        # Q&A TABLE
-        # ----------------------------------------------------
 
-        if (
-            is_qa_heading(line)
-            and i + 1 < len(lines)
-            and lines[i + 1].strip().startswith("|")
+        if is_qa_heading(
+            line
         ):
 
-            paragraph = document.add_paragraph()
-
-            run = paragraph.add_run(
-                line
+            st.markdown(
+                f"### {line.strip()}"
             )
 
-            run.bold = True
 
-            rows, next_index = (
+            rows, end = (
                 parse_markdown_table(
                     lines,
                     i + 1,
                 )
             )
 
+
             if rows:
 
-                add_docx_qa_table(
-                    document,
-                    rows,
-                )
+                cleaned = []
 
-            i = next_index
 
-            continue
+                for q, a in rows:
 
-        # ----------------------------------------------------
-        # EMPTY LINE
-        # ----------------------------------------------------
+                    if (
+                        q.lower()
+                        == "questions"
 
-        if not line:
+                        and
 
-            document.add_paragraph()
+                        a.lower()
+                        == "answers"
+                    ):
 
-            i += 1
+                        continue
 
-            continue
 
-        # ----------------------------------------------------
-        # HEADING
-        # ----------------------------------------------------
+                    cleaned.append(
+                        {
+                            "Questions": q,
+                            "Answers": a,
+                        }
+                    )
 
-        if is_heading(line):
 
-            paragraph = document.add_paragraph()
+                if cleaned:
 
-            run = paragraph.add_run(
-                line
-            )
+                    st.table(
+                        cleaned
+                    )
 
-            run.bold = True
 
-            run.font.size = Pt(
-                11
-            )
+                i = end
 
-        # ----------------------------------------------------
-        # NORMAL TEXT
-        # ----------------------------------------------------
+                continue
 
-        else:
 
-            document.add_paragraph(
-                line
-            )
+        st.markdown(
+            line
+        )
+
 
         i += 1
-
-    buffer = io.BytesIO()
-
-    document.save(
-        buffer
-    )
-
-    buffer.seek(0)
-
-    return buffer.getvalue()
 
 
 # ============================================================
 # TXT EXPORT
 # ============================================================
 
-def export_txt(
-    text,
+def create_txt(
+    text
 ):
 
     return text.encode(
@@ -2320,167 +1713,608 @@ def export_txt(
 
 
 # ============================================================
-# PNG EXPORT
+# DOCX EXPORT
 # ============================================================
 
-def export_png(
-    text,
+def add_markdown_table_to_docx(
+    document,
+    rows,
 ):
 
-    font = None
+    if not rows:
 
-    possible_fonts = [
+        return
 
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ]
+    table = document.add_table(
+        rows=1,
+        cols=2,
+    )
 
-    bold_fonts = [
 
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    table.style = (
+        "Table Grid"
+    )
 
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    ]
 
-    for path in possible_fonts:
+    header = (
+        table.rows[0].cells
+    )
 
-        if os.path.exists(path):
 
-            font = ImageFont.truetype(
-                path,
-                24,
-            )
+    header[0].text = (
+        "Questions"
+    )
 
-            break
+    header[1].text = (
+        "Answers"
+    )
 
-    if font is None:
 
-        font = ImageFont.load_default()
+    for question, answer in rows:
 
-    bold_font = font
+        if (
+            question.lower()
+            == "questions"
 
-    for path in bold_fonts:
+            and
 
-        if os.path.exists(path):
+            answer.lower()
+            == "answers"
+        ):
 
-            bold_font = ImageFont.truetype(
-                path,
-                26,
-            )
+            continue
 
-            break
+
+        cells = (
+            table.add_row().cells
+        )
+
+
+        cells[0].text = (
+            question
+        )
+
+        cells[1].text = (
+            answer
+        )
+
+
+def create_docx(
+    text
+):
+
+    document = Document()
 
     lines = text.splitlines()
 
-    line_height = 36
+    i = 0
+
+
+    while i < len(lines):
+
+        line = lines[i].strip()
+
+
+        if not line:
+
+            document.add_paragraph("")
+
+            i += 1
+
+            continue
+
+
+        if is_qa_heading(
+            line
+        ):
+
+            paragraph = (
+                document.add_paragraph()
+            )
+
+
+            run = (
+                paragraph.add_run(
+                    line
+                )
+            )
+
+
+            run.bold = True
+
+            run.font.size = Pt(
+                13
+            )
+
+
+            rows, end = (
+                parse_markdown_table(
+                    lines,
+                    i + 1,
+                )
+            )
+
+
+            if rows:
+
+                add_markdown_table_to_docx(
+                    document,
+                    rows,
+                )
+
+
+                i = end
+
+                continue
+
+
+        paragraph = (
+            document.add_paragraph(
+                line
+            )
+        )
+
+
+        for run in paragraph.runs:
+
+            run.font.size = Pt(
+                11
+            )
+
+
+        i += 1
+
+
+    output = io.BytesIO()
+
+    document.save(
+        output
+    )
+
+    output.seek(0)
+
+    return output.getvalue()
+
+
+# ============================================================
+# PDF
+# ============================================================
+
+class PDFDocument(FPDF):
+
+    def footer(self):
+
+        self.set_y(-15)
+
+        self.set_font(
+            "Arial",
+            size=8,
+        )
+
+        self.cell(
+            0,
+            10,
+            f"Page {self.page_no()}",
+            align="C",
+        )
+
+
+def pdf_safe(
+    text
+):
+
+    replacements = {
+
+        "–": "-",
+        "—": "-",
+        "’": "'",
+        "‘": "'",
+        "“": '"',
+        "”": '"',
+        "•": "-",
+        "…": "...",
+
+    }
+
+
+    for old, new in replacements.items():
+
+        text = text.replace(
+            old,
+            new,
+        )
+
+
+    return (
+        text
+        .encode(
+            "latin-1",
+            "replace",
+        )
+        .decode(
+            "latin-1"
+        )
+    )
+
+
+def add_pdf_qa_table(
+    pdf,
+    rows,
+):
+
+    if not rows:
+
+        return
+
+
+    pdf.set_font(
+        "Arial",
+        "B",
+        9,
+    )
+
+
+    col1 = 80
+    col2 = 105
+
+
+    pdf.cell(
+        col1,
+        8,
+        "Questions",
+        border=1,
+    )
+
+
+    pdf.cell(
+        col2,
+        8,
+        "Answers",
+        border=1,
+    )
+
+
+    pdf.ln()
+
+
+    pdf.set_font(
+        "Arial",
+        "",
+        8,
+    )
+
+
+    for question, answer in rows:
+
+        if (
+            question.lower()
+            == "questions"
+
+            and
+
+            answer.lower()
+            == "answers"
+        ):
+
+            continue
+
+
+        question = pdf_safe(
+            question
+        )
+
+        answer = pdf_safe(
+            answer
+        )
+
+
+        x = pdf.get_x()
+
+        y = pdf.get_y()
+
+
+        pdf.multi_cell(
+            col1,
+            5,
+            question,
+            border=1,
+        )
+
+
+        q_bottom = (
+            pdf.get_y()
+        )
+
+
+        pdf.set_xy(
+            x + col1,
+            y,
+        )
+
+
+        pdf.multi_cell(
+            col2,
+            5,
+            answer,
+            border=1,
+        )
+
+
+        a_bottom = (
+            pdf.get_y()
+        )
+
+
+        bottom = max(
+            q_bottom,
+            a_bottom,
+        )
+
+
+        pdf.set_xy(
+            x,
+            bottom,
+        )
+
+
+def create_pdf(
+    text
+):
+
+    pdf = PDFDocument()
+
+    pdf.set_auto_page_break(
+        auto=True,
+        margin=20,
+    )
+
+
+    pdf.add_page()
+
+
+    lines = text.splitlines()
+
+    i = 0
+
+
+    while i < len(lines):
+
+        line = lines[i].strip()
+
+
+        if not line:
+
+            pdf.ln(3)
+
+            i += 1
+
+            continue
+
+
+        if is_qa_heading(
+            line
+        ):
+
+            pdf.set_font(
+                "Arial",
+                "B",
+                12,
+            )
+
+
+            pdf.multi_cell(
+                0,
+                7,
+                pdf_safe(line),
+            )
+
+
+            pdf.ln(2)
+
+
+            rows, end = (
+                parse_markdown_table(
+                    lines,
+                    i + 1,
+                )
+            )
+
+
+            if rows:
+
+                add_pdf_qa_table(
+                    pdf,
+                    rows,
+                )
+
+
+                pdf.ln(4)
+
+
+                i = end
+
+                continue
+
+
+        pdf.set_font(
+            "Arial",
+            "",
+            10,
+        )
+
+
+        pdf.multi_cell(
+            0,
+            6,
+            pdf_safe(line),
+        )
+
+
+        i += 1
+
+
+    return bytes(
+        pdf.output()
+    )
+
+
+# ============================================================
+# PNG
+# ============================================================
+
+def create_png(
+    text
+):
+
+    width = 1600
+
+    margin = 70
+
+    line_height = 32
+
+
+    try:
+
+        font = ImageFont.truetype(
+            "DejaVuSans.ttf",
+            22,
+        )
+
+    except Exception:
+
+        font = ImageFont.load_default()
+
+
+    lines = []
+
+
+    for raw_line in (
+        text.splitlines()
+    ):
+
+        if not raw_line:
+
+            lines.append("")
+
+            continue
+
+
+        words = raw_line.split()
+
+        current = ""
+
+
+        for word in words:
+
+            test = (
+                current
+                + " "
+                + word
+            ).strip()
+
+
+            try:
+
+                bbox = (
+                    font.getbbox(
+                        test
+                    )
+                )
+
+                width_test = (
+                    bbox[2]
+                    - bbox[0]
+                )
+
+            except Exception:
+
+                width_test = (
+                    len(test)
+                    * 12
+                )
+
+
+            if width_test > (
+                width
+                - margin * 2
+            ):
+
+                if current:
+
+                    lines.append(
+                        current
+                    )
+
+
+                current = word
+
+            else:
+
+                current = test
+
+
+        if current:
+
+            lines.append(
+                current
+            )
+
 
     height = max(
-        800,
-        (
-            len(lines)
-            + 4
-        )
+        500,
+        margin * 2
+        + len(lines)
         * line_height,
     )
+
 
     image = Image.new(
         "RGB",
         (
-            1600,
+            width,
             height,
         ),
         "white",
     )
 
+
     draw = ImageDraw.Draw(
         image
     )
 
-    y = 50
+
+    y = margin
+
 
     for line in lines:
 
-        if is_heading(line):
-
-            draw.text(
-                (
-                    60,
-                    y,
-                ),
-                line,
-                fill="black",
-                font=bold_font,
-            )
-
-        else:
-
-            draw.text(
-                (
-                    60,
-                    y,
-                ),
-                line,
-                fill="black",
-                font=font,
-            )
+        draw.text(
+            (
+                margin,
+                y,
+            ),
+            line,
+            fill="black",
+            font=font,
+        )
 
         y += line_height
 
-    image = image.crop(
-        (
-            0,
-            0,
-            1600,
-            min(
-                height,
-                y + 50,
-            ),
-        )
-    )
 
-    buffer = io.BytesIO()
+    output = io.BytesIO()
+
 
     image.save(
-        buffer,
+        output,
         format="PNG",
     )
 
-    return buffer.getvalue()
+
+    output.seek(0)
 
 
-# ============================================================
-# HISTORY
-# ============================================================
-
-def save_history(
-    document_type,
-    draft,
-):
-
-    if not draft:
-
-        return
-
-    entry = {
-
-        "type": document_type,
-
-        "date": datetime.now().strftime(
-            "%d %b %Y %H:%M"
-        ),
-
-        "draft": draft,
-    }
-
-    st.session_state.history.insert(
-        0,
-        entry,
-    )
-
-    st.session_state.history = (
-        st.session_state.history[:10]
-    )
+    return output.getvalue()
 
 
 # ============================================================
@@ -2497,228 +2331,199 @@ with st.sidebar:
         "AI Document Composer"
     )
 
-    # --------------------------------------------------------
-    # OFFICIAL INFORMATION
-    # --------------------------------------------------------
+
+    st.divider()
+
+
+    # ========================================================
+    # PROFILE
+    # ========================================================
 
     st.markdown(
-        "### 👤 My Official Information"
+        "### 👤 User Profile"
     )
 
-    st.caption(
-        "Save your information once. It will automatically "
-        "appear at the end of generated emails and letters."
-    )
 
     st.text_input(
         "Name",
         key="profile_name",
     )
 
+
     st.text_input(
         "Designation",
         key="profile_designation",
     )
+
 
     st.text_input(
         "Contact No.",
         key="profile_contact",
     )
 
+
     st.text_input(
         "Current Station",
         key="profile_station",
     )
 
+
     if st.button(
-        "💾 Save Official Information",
+        "💾 Save Profile",
         use_container_width=True,
     ):
 
-        profile = {
-
-            "name":
-                st.session_state.profile_name.strip(),
-
-            "designation":
-                st.session_state.profile_designation.strip(),
-
-            "contact_no":
-                st.session_state.profile_contact.strip(),
-
-            "current_station":
-                st.session_state.profile_station.strip(),
-        }
-
-        if save_user_profile(
-            profile
-        ):
-
-            st.session_state.user_profile = (
-                profile
-            )
-
-            st.success(
-                "Official information saved."
-            )
-
-        else:
-
-            st.error(
-                "Could not save profile information."
-            )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # QUICK GUIDE
-    # --------------------------------------------------------
-
-    st.markdown(
-        "### Quick Guide"
-    )
-
-    st.markdown(
-        """
-**1. Choose a document**
-
-✉️ Email  
-📄 Letter  
-🔎 Inquiry
-
-**2. Enter information**
-
-Type normally or use 🎙️.
-
-**3. Generate**
-
-AI corrects language while preserving facts.
-
-**4. Review & Modify**
-
-Edit the generated document or ask AI to make changes.
-
-**5. Export**
-
-PDF • DOCX • TXT • PNG
-"""
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # SUGGESTIONS
-    # --------------------------------------------------------
-
-    with st.expander(
-        "💡 Suggestions for Improvement"
-    ):
-
-        st.markdown(
-            """
-The following features can be considered
-for future versions:
-
-📋 **Document templates**
-
-✏️ **Edit generated document**
-
-🔄 **Regenerate with changes**
-
-🌐 **Urdu / English support**
-
-📎 **Attachment support**
-
-📚 **Saved document library**
-
-🔐 **User login and secure profiles**
-
-🗂️ **Searchable document history**
-
-📊 **Inquiry progress tracking**
-
-🖨️ **Improved official printing format**
-"""
-        )
-
-    # --------------------------------------------------------
-    # ABOUT DEVELOPER
-    # --------------------------------------------------------
-
-    with st.expander(
-        "ℹ️ About the Developer"
-    ):
-
-        st.markdown(
-            """
-**Developed by: Raees Khan**
-
-Assistant Director, NADRA
-"""
-        )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # CLEAR GENERATED DRAFT
-    # --------------------------------------------------------
-
-    if st.button(
-        "🗑️ Clear Generated Draft",
-        use_container_width=True,
-    ):
-
-        st.session_state.generated_draft = ""
-
-        st.session_state.editable_draft = ""
+        update_profile_from_widgets()
 
         st.success(
-            "Generated draft cleared."
+            "Profile saved."
         )
 
-    # --------------------------------------------------------
-    # RECENT DRAFTS
-    # --------------------------------------------------------
+
+    st.divider()
+
+
+    # ========================================================
+    # GUIDE
+    # ========================================================
 
     with st.expander(
-        "Recent Drafts"
+        "📖 Quick Guide",
+        expanded=False,
     ):
 
-        if not st.session_state.history:
+        st.markdown(
+            """
+            **1. Select a document type**
 
-            st.caption(
-                "No recent drafts."
-            )
+            Choose Email, Letter or Inquiry.
 
-        else:
+            **2. Give instructions**
 
-            for i, item in enumerate(
+            Type naturally or use the microphone.
+
+            **3. Generate**
+
+            AI converts your instructions into
+            professional official English.
+
+            **4. Review**
+
+            Edit the generated document manually.
+
+            **5. Ask AI to modify**
+
+            Give AI instructions for further changes.
+
+            **6. Export**
+
+            Download PDF, DOCX, TXT or PNG.
+            """
+        )
+
+
+    # ========================================================
+    # SUGGESTIONS
+    # ========================================================
+
+    with st.expander(
+        "💡 Suggestions for Improvement",
+        expanded=False,
+    ):
+
+        st.markdown(
+            """
+            - Document templates
+            - Edit generated document
+            - Regenerate with changes
+            - Urdu / English support
+            - Attachment support
+            - Saved document library
+            - User login and secure profiles
+            - Searchable document history
+            - Inquiry progress tracking
+            - Improved official printing format
+            """
+        )
+
+
+    # ========================================================
+    # HISTORY
+    # ========================================================
+
+    with st.expander(
+        "🕘 Document History",
+        expanded=False,
+    ):
+
+        if st.session_state.history:
+
+            for index, item in enumerate(
                 st.session_state.history
             ):
 
                 st.markdown(
-                    f"**{item['type']}**"
+                    f"**{index + 1}. "
+                    f"{item['type']}**"
                 )
 
                 st.caption(
                     item["date"]
                 )
 
+
                 if st.button(
-                    "Open",
-                    key=f"history_open_{i}",
-                    use_container_width=True,
+                    "Restore",
+                    key=(
+                        f"restore_"
+                        f"history_"
+                        f"{index}"
+                    ),
                 ):
 
+                    content = (
+                        item["content"]
+                    )
+
+
                     st.session_state.generated_draft = (
-                        item["draft"]
+                        content
                     )
 
                     st.session_state.editable_draft = (
-                        item["draft"]
+                        content
+                    )
+
+                    st.session_state.editor_sync = (
+                        content
                     )
 
                     st.rerun()
+
+        else:
+
+            st.caption(
+                "No documents generated yet."
+            )
+
+
+    st.divider()
+
+
+    # ========================================================
+    # DEVELOPER
+    # ========================================================
+
+    st.markdown(
+        """
+        <div class="developer-box">
+        <b>About the Developer</b><br><br>
+        Developed by: Raees Khan<br>
+        Assistant Director, NADRA
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -2726,22 +2531,19 @@ Assistant Director, NADRA
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">📝 DraftForge</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="subtitle">'
-    'AI Document Composer — create professional official '
-    'documents using text or voice'
+    '<div class="main-title">'
+    '📝 DraftForge — AI Document Composer'
     '</div>',
     unsafe_allow_html=True,
 )
 
-st.divider()
 
 st.markdown(
-    "### 📌 What would you like to create?"
+    '<div class="subtitle">'
+    'Create professional official documents using '
+    'natural language or voice input.'
+    '</div>',
+    unsafe_allow_html=True,
 )
 
 
@@ -2749,36 +2551,16 @@ st.markdown(
 # DOCUMENT TYPE
 # ============================================================
 
-document_choice = st.segmented_control(
-    "Document Type",
+document_type = st.selectbox(
+    "Select Document Type",
+
     [
-        "✉️ Email",
-        "📄 Letter",
-        "🔎 Inquiry",
+        "Email",
+        "Letter",
+        "Inquiry",
     ],
-    default="✉️ Email",
-    key="document_type_selector",
-    selection_mode="single",
-    width="stretch",
-    label_visibility="collapsed",
-)
 
-
-if document_choice == "📄 Letter":
-
-    current_type = "Letter"
-
-elif document_choice == "🔎 Inquiry":
-
-    current_type = "Inquiry"
-
-else:
-
-    current_type = "Email"
-
-
-st.session_state.document_type = (
-    current_type
+    key="document_type",
 )
 
 
@@ -2786,30 +2568,70 @@ st.session_state.document_type = (
 # EMAIL
 # ============================================================
 
-if current_type == "Email":
+if document_type == "Email":
 
     st.markdown(
-        "### ✉️ Official Email"
+        "### 📧 Email"
     )
 
-    st.text_input(
-        "Recipient",
-        key="email_recipient",
-        placeholder="Enter recipient",
+
+    st.info(
+        "You can type your instructions or record them "
+        "using the microphone."
     )
 
-    st.text_input(
-        "Subject",
-        key="email_subject",
-        placeholder="Enter email subject",
+
+    audio = st.audio_input(
+        "🎤 Record Email Instructions",
+        key="email_audio",
     )
 
-    render_composer(
-        "email",
+
+    if audio is not None:
+
+        transcript = transcribe_audio(
+            audio
+        )
+
+
+        if transcript:
+
+            current = (
+                st.session_state
+                .email_instruction
+            )
+
+
+            if current.strip():
+
+                st.session_state.email_instruction = (
+                    current.rstrip()
+                    + "\n"
+                    + transcript
+                )
+
+            else:
+
+                st.session_state.email_instruction = (
+                    transcript
+                )
+
+
+    st.text_area(
         "Email Instructions",
+
+        key="email_instruction",
+
+        height=220,
+
+        placeholder=(
+            "Example: Draft an email to the regional "
+            "office requesting urgent action regarding..."
+        ),
     )
 
-    # Generate remains LAST.
+
+    # GENERATE AT LAST
 
     if st.button(
         "✨ Generate Email",
@@ -2817,80 +2639,144 @@ if current_type == "Email":
         use_container_width=True,
     ):
 
-        if not profile_is_complete():
+        if not profile_complete():
 
-            st.warning(
-                "Please complete and save all four fields "
-                "under 'My Official Information' first."
+            st.error(
+                "Please complete and save your User Profile "
+                "before generating an Email."
             )
 
-        elif not st.session_state.email_input.strip():
+
+        elif not (
+            st.session_state
+            .email_instruction
+            .strip()
+        ):
 
             st.warning(
-                "Please provide email information by typing "
-                "or using the microphone."
+                "Please enter or record your instructions."
             )
+
 
         else:
 
             with st.spinner(
-                "Drafting professional email..."
+                "Generating professional email..."
             ):
 
-                try:
+                result = generate_email(
+                    st.session_state.email_instruction
+                )
 
-                    draft = generate_email()
 
-                    st.session_state.generated_draft = (
-                        draft
+            if result:
+
+                final_document = (
+                    result
+                    + get_signature(
+                        st.session_state.profile
                     )
+                )
 
-                    st.session_state.editable_draft = (
-                        draft
-                    )
 
-                    save_history(
-                        "Email",
-                        draft,
-                    )
+                st.session_state.generated_draft = (
+                    final_document
+                )
 
-                    st.rerun()
+                st.session_state.editable_draft = (
+                    final_document
+                )
 
-                except Exception as e:
+                st.session_state.editor_sync = (
+                    final_document
+                )
 
-                    st.error(
-                        f"Could not generate email: {e}"
-                    )
+
+                save_to_history(
+                    "Email",
+                    final_document,
+                )
+
+
+                st.rerun()
+
+
+            else:
+
+                st.error(
+                    "AI generation failed. "
+                    "Please check your API key."
+                )
 
 
 # ============================================================
 # LETTER
 # ============================================================
 
-elif current_type == "Letter":
+elif document_type == "Letter":
 
     st.markdown(
-        "### 📄 Official Letter"
+        "### 📄 Letter"
     )
 
-    st.text_input(
-        "Recipient",
-        key="letter_recipient",
-        placeholder="Enter recipient",
+
+    st.info(
+        "You can type your instructions or record them "
+        "using the microphone."
     )
 
-    st.text_input(
-        "Subject",
-        key="letter_subject",
-        placeholder="Enter letter subject",
+
+    audio = st.audio_input(
+        "🎤 Record Letter Instructions",
+        key="letter_audio",
     )
 
-    render_composer(
-        "letter",
+
+    if audio is not None:
+
+        transcript = transcribe_audio(
+            audio
+        )
+
+
+        if transcript:
+
+            current = (
+                st.session_state
+                .letter_instruction
+            )
+
+
+            if current.strip():
+
+                st.session_state.letter_instruction = (
+                    current.rstrip()
+                    + "\n"
+                    + transcript
+                )
+
+            else:
+
+                st.session_state.letter_instruction = (
+                    transcript
+                )
+
+
+    st.text_area(
         "Letter Instructions",
+
+        key="letter_instruction",
+
+        height=220,
+
+        placeholder=(
+            "Example: Draft a letter to the Director "
+            "requesting..."
+        ),
     )
 
-    # Generate remains LAST.
+
+    # GENERATE AT LAST
 
     if st.button(
         "✨ Generate Letter",
@@ -2898,371 +2784,404 @@ elif current_type == "Letter":
         use_container_width=True,
     ):
 
-        if not profile_is_complete():
+        if not profile_complete():
 
-            st.warning(
-                "Please complete and save all four fields "
-                "under 'My Official Information' first."
+            st.error(
+                "Please complete and save your User Profile "
+                "before generating a Letter."
             )
 
-        elif not st.session_state.letter_input.strip():
+
+        elif not (
+            st.session_state
+            .letter_instruction
+            .strip()
+        ):
 
             st.warning(
-                "Please provide letter information by typing "
-                "or using the microphone."
+                "Please enter or record your instructions."
             )
+
 
         else:
 
             with st.spinner(
-                "Drafting professional letter..."
+                "Generating professional letter..."
             ):
 
-                try:
+                result = generate_letter(
+                    st.session_state.letter_instruction
+                )
 
-                    draft = generate_letter()
 
-                    st.session_state.generated_draft = (
-                        draft
+            if result:
+
+                final_document = (
+                    result
+                    + get_signature(
+                        st.session_state.profile
                     )
+                )
 
-                    st.session_state.editable_draft = (
-                        draft
-                    )
 
-                    save_history(
-                        "Letter",
-                        draft,
-                    )
+                st.session_state.generated_draft = (
+                    final_document
+                )
 
-                    st.rerun()
+                st.session_state.editable_draft = (
+                    final_document
+                )
 
-                except Exception as e:
+                st.session_state.editor_sync = (
+                    final_document
+                )
 
-                    st.error(
-                        f"Could not generate letter: {e}"
-                    )
+
+                save_to_history(
+                    "Letter",
+                    final_document,
+                )
+
+
+                st.rerun()
+
+
+            else:
+
+                st.error(
+                    "AI generation failed. "
+                    "Please check your API key."
+                )
 
 
 # ============================================================
 # INQUIRY
 # ============================================================
 
-elif current_type == "Inquiry":
+elif document_type == "Inquiry":
 
     st.markdown(
-        "### 🔎 Departmental Inquiry"
+        "### 🔎 Inquiry"
     )
 
-    inquiry_choice = st.segmented_control(
-        "Inquiry Type",
+
+    inquiry_type = st.radio(
+        "Select Inquiry Type",
+
         [
-            "⚖️ E&D Inquiry",
-            "🔍 FFI Inquiry",
+            "E&D Inquiry",
+            "FFI Inquiry",
         ],
-        default="⚖️ E&D Inquiry",
-        key="inquiry_type_selector",
-        selection_mode="single",
-        width="stretch",
+
+        horizontal=True,
     )
 
-    if inquiry_choice == "🔍 FFI Inquiry":
 
-        st.markdown(
-            """
-            <div class="warning-box">
-            <strong>FFI Inquiry</strong><br>
-            This module is currently under construction.
-            </div>
-            """,
-            unsafe_allow_html=True,
+    # ========================================================
+    # FFI
+    # ========================================================
+
+    if inquiry_type == "FFI Inquiry":
+
+        st.info(
+            "FFI Inquiry is currently Under Construction / "
+            "Under Process."
         )
+
+
+    # ========================================================
+    # E&D
+    # ========================================================
 
     else:
 
-        st.session_state.inquiry_type = (
-            "E&D Inquiry"
+        st.markdown(
+            "### E&D Inquiry"
         )
 
-        # ----------------------------------------------------
-        # REFERENCE NUMBER
-        # ----------------------------------------------------
-
-        reference_no = st.text_input(
-            "Inquiry Reference No.",
-            placeholder="ABC/678",
-            key="inquiry_reference_no",
-        )
 
         st.caption(
-            "Select an index, add it, then provide information "
-            "by typing or voice. The same index can be selected "
-            "multiple times."
+            "Add the required indexes. "
+            "The same index can be added multiple times."
         )
 
-        # ----------------------------------------------------
-        # INDEX SELECTOR
-        # ----------------------------------------------------
 
-        selected_index = st.selectbox(
-            "➕ Select E&D Index",
+        available_indexes = st.selectbox(
+            "Select Index to Add",
+
             ED_INDEXES,
+
             key="selected_ed_index",
         )
 
+
         if st.button(
-            "➕ Add Selected Index",
+            "➕ Add Index",
             use_container_width=True,
         ):
 
-            add_ed_index(
-                selected_index
+            add_inquiry_index(
+                available_indexes
             )
 
             st.rerun()
 
+
         st.divider()
 
-        # ----------------------------------------------------
-        # INQUIRY INFORMATION
-        # ----------------------------------------------------
 
-        if st.session_state.ed_instances:
-
-            st.markdown(
-                "### 📋 Inquiry Information"
-            )
-
-            for item in list(
-                st.session_state.ed_instances
-            ):
-
-                index_name = item["index"]
-
-                # ============================================
-                # DOCUMENTS RECORDED
-                # ============================================
-
-                if index_name == "Documents Recorded":
-
-                    documents_recorded = (
-                        render_documents_recorded()
-                    )
-
-                    st.session_state[
-                        "documents_recorded_selected"
-                    ] = documents_recorded
-
-                    st.divider()
-
-                    continue
-
-                # ============================================
-                # INQUIRY COMMITTEE
-                # ============================================
-
-                if index_name == "Inquiry Committee":
-
-                    committee = render_committee()
-
-                    st.session_state[
-                        "inquiry_committee_data"
-                    ] = committee
-
-                    st.divider()
-
-                    continue
-
-                # ============================================
-                # NORMAL INDEX
-                # ============================================
-
-                render_ed_input(
-                    item
-                )
-
-                if st.button(
-                    "🗑️ Remove This Index",
-                    key=f"remove_ed_{item['id']}",
-                ):
-
-                    remove_ed_index(
-                        item["id"]
-                    )
-
-                    st.rerun()
-
-                st.divider()
-
-        # ----------------------------------------------------
-        # GENERATE REPORT
-        # ----------------------------------------------------
-
-        if st.button(
-            "✨ Generate Inquiry Report",
-            type="primary",
-            use_container_width=True,
+        if not (
+            st.session_state
+            .inquiry_indexes
         ):
 
-            if not reference_no.strip():
+            st.info(
+                "No indexes added yet. "
+                "Select an index above and click Add Index."
+            )
 
-                st.warning(
-                    "Please enter the Inquiry Reference No."
+
+        else:
+
+            collected_data = []
+
+
+            for item in (
+                st.session_state
+                .inquiry_indexes
+            ):
+
+                col1, col2 = st.columns(
+                    [
+                        8,
+                        1,
+                    ]
                 )
 
-            elif not st.session_state.ed_instances:
 
-                st.warning(
-                    "Please add at least one inquiry index."
-                )
+                with col1:
 
-            else:
-
-                documents_recorded = (
-                    st.session_state.get(
-                        "documents_recorded_selected",
-                        [],
+                    result = (
+                        render_index_input(
+                            item
+                        )
                     )
-                )
 
-                committee = (
-                    st.session_state.get(
-                        "inquiry_committee_data",
-                        {},
-                    )
-                )
 
-                with st.spinner(
-                    "Preparing departmental inquiry report..."
-                ):
+                with col2:
 
-                    try:
+                    st.write("")
 
-                        draft = generate_ed_report(
-                            reference_no,
-                            documents_recorded,
-                            committee,
-                        )
 
-                        st.session_state.generated_draft = (
-                            draft
-                        )
+                    if st.button(
+                        "🗑️",
+                        key=(
+                            f"delete_"
+                            f"{item['id']}"
+                        ),
+                        help="Remove this index",
+                    ):
 
-                        st.session_state.editable_draft = (
-                            draft
-                        )
-
-                        save_history(
-                            "E&D Inquiry",
-                            draft,
+                        remove_inquiry_index(
+                            item["id"]
                         )
 
                         st.rerun()
 
-                    except Exception as e:
 
-                        st.error(
-                            f"Could not generate inquiry report: {e}"
+                if result:
+
+                    collected_data.append(
+
+                        {
+                            "name":
+                            item["name"],
+
+                            "number":
+                            item["number"],
+
+                            **result,
+
+                        }
+
+                    )
+
+
+                st.divider()
+
+
+            # ------------------------------------------------
+            # GENERATE INQUIRY
+            # ------------------------------------------------
+
+            if st.button(
+                "✨ Generate Inquiry Report",
+                type="primary",
+                use_container_width=True,
+            ):
+
+                if not collected_data:
+
+                    st.warning(
+                        "Please add at least one inquiry "
+                        "index."
+                    )
+
+
+                else:
+
+                    with st.spinner(
+                        "Preparing E&D Inquiry Report..."
+                    ):
+
+                        result = (
+                            generate_ed_report(
+                                collected_data
+                            )
                         )
 
-        # ----------------------------------------------------
-        # START NEW INQUIRY
-        # ----------------------------------------------------
 
-        if st.button(
-            "🔄 Start New Inquiry",
-            use_container_width=True,
-        ):
+                    if result:
 
-            st.session_state.ed_instances = []
+                        st.session_state.generated_draft = (
+                            result
+                        )
 
-            st.session_state.generated_draft = ""
+                        st.session_state.editable_draft = (
+                            result
+                        )
 
-            st.session_state.editable_draft = ""
+                        st.session_state.editor_sync = (
+                            result
+                        )
 
-            st.session_state.documents_recorded_selected = []
 
-            st.session_state.inquiry_committee_data = {}
+                        save_to_history(
+                            "E&D Inquiry",
+                            result,
+                        )
 
-            st.rerun()
+
+                        st.rerun()
+
+
+                    else:
+
+                        st.error(
+                            "AI generation failed. "
+                            "Please check your API key."
+                        )
 
 
 # ============================================================
 # GENERATED DOCUMENT
 # ============================================================
 
-if st.session_state.get(
-    "generated_draft",
-    "",
-).strip():
+if st.session_state.generated_draft:
 
     st.divider()
 
-    st.markdown(
-        "## 📄 Generated Document"
-    )
-
-    # --------------------------------------------------------
-    # LIVE PREVIEW
-    # --------------------------------------------------------
 
     st.markdown(
-        "### 👁️ Document Preview"
+        "## 📑 Generated Document"
     )
 
-    st.caption(
-        "Questions and Answers are displayed as a "
-        "two-column table."
-    )
 
-    render_document_markdown(
-        st.session_state.editable_draft
-    )
+    # ========================================================
+    # CRITICAL STREAMLIT FIX
+    # ========================================================
+    #
+    # Apply editor_sync BEFORE creating the text_area.
+    #
+    # This prevents:
+    #
+    # st.session_state.document_editor cannot be modified
+    # after the widget with key document_editor is instantiated
+    #
+    # ========================================================
 
-    st.divider()
+    if st.session_state.get(
+        "editor_sync",
+        "",
+    ):
 
-    # --------------------------------------------------------
-    # EDIT DOCUMENT
-    # --------------------------------------------------------
+        st.session_state.document_editor = (
+            st.session_state.editor_sync
+        )
+
+        st.session_state.editor_sync = ""
+
+
+    elif not st.session_state.get(
+        "document_editor",
+        "",
+    ):
+
+        st.session_state.document_editor = (
+
+            st.session_state.editable_draft
+
+            or
+
+            st.session_state.generated_draft
+
+        )
+
+
+    # ========================================================
+    # MANUAL EDITOR
+    # ========================================================
 
     st.markdown(
         "### ✏️ Review & Modify Document"
     )
 
-    st.caption(
-        "You can directly edit the generated document "
-        "before exporting it."
-    )
 
     edited_document = st.text_area(
+
         "Generated Document",
-        key="editable_draft",
+
+        key="document_editor",
+
         height=650,
+
         label_visibility="collapsed",
+
     )
 
+
     col1, col2 = st.columns(2)
+
 
     with col1:
 
         if st.button(
             "💾 Save Changes",
-            type="primary",
             use_container_width=True,
         ):
+
+            # IMPORTANT:
+            # Do NOT assign to document_editor here.
+
+            st.session_state.editable_draft = (
+                edited_document
+            )
 
             st.session_state.generated_draft = (
                 edited_document
             )
 
-            save_history(
-                st.session_state.document_type,
+
+            save_to_history(
+                document_type,
                 edited_document,
             )
 
+
             st.success(
-                "Your changes have been saved."
+                "Changes saved."
             )
+
 
     with col2:
 
@@ -3271,163 +3190,367 @@ if st.session_state.get(
             use_container_width=True,
         ):
 
-            st.session_state.editable_draft = (
-                st.session_state.generated_draft
+            original = (
+                st.session_state
+                .generated_draft
             )
+
+
+            st.session_state.editable_draft = (
+                original
+            )
+
+            st.session_state.editor_sync = (
+                original
+            )
+
 
             st.rerun()
 
-    # --------------------------------------------------------
-    # AI EDITING
-    # --------------------------------------------------------
+
+    # ========================================================
+    # AI MODIFICATION
+    # ========================================================
 
     st.markdown(
         "### 🤖 Ask AI to Modify the Document"
     )
 
-    st.caption(
-        "Describe exactly what you want changed."
-    )
 
     st.text_area(
-        "Modification instructions",
+
+        "Modification Instructions",
+
         key="edit_instruction",
-        height=100,
+
+        height=130,
+
         placeholder=(
-            "Example: Make the recommendations more "
-            "formal without changing their meaning."
+            "Example: Make the language more formal, "
+            "shorten the introduction, or revise the "
+            "recommendation section..."
         ),
+
     )
+
 
     if st.button(
         "🤖 Apply AI Changes",
+        type="primary",
         use_container_width=True,
     ):
 
         instruction = (
-            st.session_state.edit_instruction.strip()
+            st.session_state
+            .edit_instruction
+            .strip()
         )
+
+
+        current_document = (
+
+            st.session_state
+            .editable_draft
+
+            or
+
+            st.session_state
+            .document_editor
+
+            or
+
+            st.session_state
+            .generated_draft
+
+        )
+
 
         if not instruction:
 
             st.warning(
-                "Please enter the changes you want AI to make."
+                "Please enter instructions for the AI."
             )
 
-        elif not edited_document.strip():
+
+        elif not current_document.strip():
 
             st.warning(
                 "There is no document to modify."
             )
 
+
         else:
 
             with st.spinner(
-                "Applying requested changes..."
+                "AI is modifying the document..."
             ):
 
-                try:
-
-                    modified = (
-                        modify_generated_document(
-                            edited_document,
-                            instruction,
-                        )
+                modified = (
+                    modify_generated_document(
+                        current_document,
+                        instruction,
                     )
+                )
 
-                    st.session_state.editable_draft = (
-                        modified
-                    )
 
-                    st.session_state.generated_draft = (
-                        modified
-                    )
+            if modified:
 
-                    st.session_state.edit_instruction = ""
+                # =================================================
+                # IMPORTANT:
+                #
+                # DO NOT directly modify document_editor.
+                #
+                # Store modified content in editor_sync.
+                # The next rerun applies editor_sync BEFORE
+                # text_area is instantiated.
+                # =================================================
 
-                    save_history(
-                        st.session_state.document_type,
-                        modified,
-                    )
+                st.session_state.editable_draft = (
+                    modified
+                )
 
-                    st.success(
-                        "AI changes applied."
-                    )
+                st.session_state.generated_draft = (
+                    modified
+                )
 
-                    st.rerun()
+                st.session_state.editor_sync = (
+                    modified
+                )
 
-                except Exception as e:
+                st.session_state.edit_instruction = ""
 
-                    st.error(
-                        f"Could not modify document: {e}"
-                    )
 
-    # --------------------------------------------------------
+                save_to_history(
+                    document_type,
+                    modified,
+                )
+
+
+                st.rerun()
+
+
+            else:
+
+                st.error(
+                    "Could not modify document. "
+                    "Please check your API key."
+                )
+
+
+    # ========================================================
+    # PREVIEW
+    # ========================================================
+
+    st.markdown(
+        "### 👁️ Document Preview"
+    )
+
+
+    preview_document = (
+
+        st.session_state
+        .editable_draft
+
+        or
+
+        edited_document
+
+        or
+
+        st.session_state
+        .generated_draft
+
+    )
+
+
+    display_generated_document(
+        preview_document
+    )
+
+
+    # ========================================================
     # EXPORT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.markdown(
         "### 📤 Export Document"
     )
 
-    final_document = (
-        st.session_state.get(
-            "editable_draft",
-            st.session_state.generated_draft,
-        )
+
+    export_document = (
+
+        st.session_state
+        .editable_draft
+
+        or
+
+        edited_document
+
+        or
+
+        st.session_state
+        .generated_draft
+
     )
 
-    col1, col2, col3, col4 = st.columns(
-        4
+
+    col1, col2, col3, col4 = (
+        st.columns(4)
     )
+
+
+    # ========================================================
+    # PDF
+    # ========================================================
 
     with col1:
 
-        st.download_button(
-            "📄 PDF",
-            data=export_pdf(
-                final_document
-            ),
-            file_name="DraftForge_Document.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        try:
+
+            pdf_bytes = create_pdf(
+                export_document
+            )
+
+
+            st.download_button(
+
+                "📕 PDF",
+
+                data=pdf_bytes,
+
+                file_name=(
+                    "draftforge_document.pdf"
+                ),
+
+                mime="application/pdf",
+
+                use_container_width=True,
+
+            )
+
+
+        except Exception as e:
+
+            st.error(
+                f"PDF export failed: {e}"
+            )
+
+
+    # ========================================================
+    # DOCX
+    # ========================================================
 
     with col2:
 
-        st.download_button(
-            "📝 DOCX",
-            data=export_docx(
-                final_document
-            ),
-            file_name="DraftForge_Document.docx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            ),
-            use_container_width=True,
-        )
+        try:
+
+            docx_bytes = create_docx(
+                export_document
+            )
+
+
+            st.download_button(
+
+                "📘 DOCX",
+
+                data=docx_bytes,
+
+                file_name=(
+                    "draftforge_document.docx"
+                ),
+
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.wordprocessingml.document"
+                ),
+
+                use_container_width=True,
+
+            )
+
+
+        except Exception as e:
+
+            st.error(
+                f"DOCX export failed: {e}"
+            )
+
+
+    # ========================================================
+    # TXT
+    # ========================================================
 
     with col3:
 
-        st.download_button(
-            "📃 TXT",
-            data=export_txt(
-                final_document
-            ),
-            file_name="DraftForge_Document.txt",
-            mime="text/plain",
-            use_container_width=True,
+        txt_bytes = create_txt(
+            export_document
         )
+
+
+        st.download_button(
+
+            "📄 TXT",
+
+            data=txt_bytes,
+
+            file_name=(
+                "draftforge_document.txt"
+            ),
+
+            mime="text/plain",
+
+            use_container_width=True,
+
+        )
+
+
+    # ========================================================
+    # PNG
+    # ========================================================
 
     with col4:
 
-        st.download_button(
-            "🖼️ PNG",
-            data=export_png(
-                final_document
-            ),
-            file_name="DraftForge_Document.png",
-            mime="image/png",
-            use_container_width=True,
-    )
+        try:
+
+            png_bytes = create_png(
+                export_document
+            )
+
+
+            st.download_button(
+
+                "🖼️ PNG",
+
+                data=png_bytes,
+
+                file_name=(
+                    "draftforge_document.png"
+                ),
+
+                mime="image/png",
+
+                use_container_width=True,
+
+            )
+
+
+        except Exception as e:
+
+            st.error(
+                f"PNG export failed: {e}"
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.markdown("---")
+
+st.caption(
+    "DraftForge — AI Document Composer"
+)
+
+st.caption(
+    "Developed by Raees Khan, Assistant Director, NADRA"
+)
