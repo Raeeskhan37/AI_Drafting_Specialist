@@ -8,6 +8,7 @@ from datetime import datetime
 
 import streamlit as st
 
+
 # ============================================================
 # OPTIONAL PACKAGES
 # ============================================================
@@ -20,7 +21,6 @@ except Exception:
 try:
     from docx import Document
     from docx.shared import Pt, Inches
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
 except Exception:
     Document = None
@@ -37,7 +37,7 @@ except Exception:
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -118,26 +118,19 @@ COMMITTEE_ROLES = [
 DEFAULTS = {
     "document_type": "Email",
     "inquiry_type": "E&D Inquiry",
-
     "index_data": [],
-
     "generated_draft": "",
     "editable_draft": "",
     "document_editor": "",
     "editor_sync": "",
-
     "edit_instruction": "",
     "edit_instruction_sync": "",
-
     "email_instruction": "",
     "letter_instruction": "",
-
     "email_voice_hash": "",
     "letter_voice_hash": "",
-
     "profile": {},
     "history": [],
-
     "show_history": False,
     "show_profile": False,
 }
@@ -247,7 +240,7 @@ st.markdown(
         padding-bottom: 3rem;
     }
 
-    /* Inputs */
+    /* ---------------- INPUTS ---------------- */
 
     div[data-testid="stTextInput"] input,
     div[data-testid="stTextArea"] textarea {
@@ -275,15 +268,46 @@ st.markdown(
         box-shadow: 0 0 0 2px rgba(99,102,241,0.12) !important;
     }
 
-    /* Buttons */
+    /* ---------------- BUTTONS ---------------- */
 
     .stButton > button {
-        border-radius: 10px;
-        font-weight: 700;
-        min-height: 42px;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        min-height: 42px !important;
     }
 
-    /* Divider */
+    /* ---------------- COMMITTEE ROLE CARDS ---------------- */
+
+    .committee-role-card {
+        background-color: #e0f2fe;
+        border: 2px solid #7dd3fc;
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-top: 18px;
+        margin-bottom: 8px;
+    }
+
+    .committee-role-title {
+        color: #0c4a6e;
+        font-size: 19px;
+        font-weight: 800;
+        margin-bottom: 4px;
+    }
+
+    .committee-role-description {
+        color: #334155;
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    .committee-tip {
+        background-color: #eff6ff;
+        border-left: 4px solid #2563eb;
+        border-radius: 8px;
+        padding: 12px 14px;
+        color: #1e3a8a;
+        margin-top: 15px;
+    }
 
     hr {
         margin-top: 25px;
@@ -918,7 +942,7 @@ def save_history(
 
 
 # ============================================================
-# EXPORT FUNCTIONS
+# EXPORT HELPERS
 # ============================================================
 
 def safe_pdf_text(text):
@@ -1004,7 +1028,6 @@ def create_pdf(text):
 
                 continue
 
-            # Q&A markdown rows
             if (
                 "|" in line
                 and line.count("|") >= 2
@@ -1114,21 +1137,10 @@ def create_docx(text):
 
         section = doc.sections[0]
 
-        section.top_margin = Inches(
-            0.7
-        )
-
-        section.bottom_margin = Inches(
-            0.7
-        )
-
-        section.left_margin = Inches(
-            0.8
-        )
-
-        section.right_margin = Inches(
-            0.8
-        )
+        section.top_margin = Inches(0.7)
+        section.bottom_margin = Inches(0.7)
+        section.left_margin = Inches(0.8)
+        section.right_margin = Inches(0.8)
 
         lines = text.splitlines()
 
@@ -1138,7 +1150,6 @@ def create_docx(text):
 
             line = lines[i]
 
-            # Markdown table
             if (
                 "|" in line
                 and i + 1 < len(lines)
@@ -1164,7 +1175,6 @@ def create_docx(text):
                     ):
 
                         i += 1
-
                         continue
 
                     parts = [
@@ -1175,6 +1185,7 @@ def create_docx(text):
                     ]
 
                     if len(parts) >= 2:
+
                         rows.append(
                             parts[:2]
                         )
@@ -1188,9 +1199,7 @@ def create_docx(text):
                         cols=2,
                     )
 
-                    table.style = (
-                        "Table Grid"
-                    )
+                    table.style = "Table Grid"
 
                     table.alignment = (
                         WD_TABLE_ALIGNMENT.CENTER
@@ -1213,11 +1222,13 @@ def create_docx(text):
                                 else ""
                             )
 
-                            for p in (
+                            for paragraph in (
                                 cell.paragraphs
                             ):
 
-                                for run in p.runs:
+                                for run in (
+                                    paragraph.runs
+                                ):
 
                                     run.font.name = (
                                         "Arial"
@@ -1233,9 +1244,7 @@ def create_docx(text):
 
             paragraph = doc.add_paragraph()
 
-            run = paragraph.add_run(
-                line
-            )
+            run = paragraph.add_run(line)
 
             run.font.name = "Arial"
             run.font.size = Pt(11)
@@ -1304,8 +1313,11 @@ def create_png(text):
             )
 
             if wrapped:
+
                 lines.extend(wrapped)
+
             else:
+
                 lines.append("")
 
         width = 1400
@@ -1323,9 +1335,7 @@ def create_png(text):
             "white",
         )
 
-        draw = ImageDraw.Draw(
-            image
-        )
+        draw = ImageDraw.Draw(image)
 
         draw.text(
             (50, 35),
@@ -1368,7 +1378,7 @@ def create_png(text):
 
 
 # ============================================================
-# HEADER — NATIVE STREAMLIT, NO HTML
+# HEADER
 # ============================================================
 
 st.title("✦ DraftForge")
@@ -1397,7 +1407,9 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("💡 Tips & Templates")
+    st.subheader(
+        "💡 Tips & Templates"
+    )
 
     st.write(
         "Write naturally. DraftForge will convert your "
@@ -1466,7 +1478,9 @@ with st.sidebar:
 
 if st.session_state.show_profile:
 
-    st.header("👤 My Profile")
+    st.header(
+        "👤 My Profile"
+    )
 
     st.caption(
         "This information is automatically appended to "
@@ -1705,7 +1719,6 @@ if st.session_state.document_type == "Email":
         key="email_audio",
     )
 
-    # Process audio BEFORE text widget.
     if audio is not None:
 
         try:
@@ -1865,7 +1878,6 @@ elif st.session_state.document_type == "Letter":
         key="letter_audio",
     )
 
-    # Process audio BEFORE text widget.
     if audio is not None:
 
         try:
@@ -2096,9 +2108,9 @@ elif st.session_state.document_type == "Inquiry":
 
             st.rerun()
 
-    # --------------------------------------------------------
+    # ========================================================
     # SELECTED INDEXES
-    # --------------------------------------------------------
+    # ========================================================
 
     if st.session_state.index_data:
 
@@ -2145,17 +2157,15 @@ elif st.session_state.document_type == "Inquiry":
                     f"No. {occurrence}"
                 )
 
-            st.markdown(
-                "---"
-            )
+            st.markdown("---")
 
             st.subheader(
                 display_name
             )
 
-            # ------------------------------------------------
+            # =================================================
             # DOCUMENTS RECORDED
-            # ------------------------------------------------
+            # =================================================
 
             if base_name == (
                 "Documents Recorded"
@@ -2173,9 +2183,7 @@ elif st.session_state.document_type == "Inquiry":
                         "documents",
                         [],
                     ),
-                    key=(
-                        f"documents_{position}"
-                    ),
+                    key=f"documents_{position}",
                 )
 
                 item["documents"] = documents
@@ -2193,114 +2201,184 @@ elif st.session_state.document_type == "Inquiry":
 
                 continue
 
-            # ------------------------------------------------
+            # =================================================
             # INQUIRY COMMITTEE
-            # ------------------------------------------------
+            # =================================================
 
             if base_name == "Inquiry Committee":
-    st.markdown("### 👥 Inquiry Committee")
-    st.caption(
-        "Enter the details of each committee member under the role shown below."
-    )
 
-    committee_data = item.get("committee", {})
+                st.markdown(
+                    """
+                    <div class="committee-tip">
+                        <b>How to complete this section:</b>
+                        Each shaded box below represents a different
+                        committee role. Enter the ERP#, Name and
+                        Designation inside the box belonging to that role.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-    for role in COMMITTEE_ROLES:
-        st.markdown(
-            f"""
-            <div style="
-                background:#f1f5f9;
-                border:1px solid #cbd5e1;
-                border-radius:12px;
-                padding:14px 16px 8px 16px;
-                margin:12px 0 8px 0;
-            ">
-                <div style="
-                    color:#0f172a;
-                    font-size:18px;
-                    font-weight:700;
-                    margin-bottom:4px;
-                ">
-                    {role}
-                </div>
-                <div style="
-                    color:#475569;
-                    font-size:13px;
-                ">
-                    Enter the ERP#, name and designation for this role.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                committee = item.get(
+                    "committee",
+                    [],
+                )
 
-        role_key = role.lower().replace(" ", "_").replace("#", "no")
+                # Safety conversion for older saved session data.
+                if not isinstance(
+                    committee,
+                    list,
+                ):
 
-        current = committee_data.get(
-            role,
-            {
-                "ERP#": "",
-                "Name": "",
-                "Designation": "",
-            },
-        )
+                    committee = []
 
-        col1, col2, col3 = st.columns(3)
+                # Make sure all four roles exist.
+                existing_roles = {
+                    member.get(
+                        "role",
+                        "",
+                    )
+                    for member in committee
+                    if isinstance(
+                        member,
+                        dict,
+                    )
+                }
 
-        with col1:
-            erp = st.text_input(
-                "ERP#",
-                value=current.get("ERP#", ""),
-                key=f"committee_{position}_{role_key}_erp",
-                placeholder="Enter ERP#",
-            )
+                for role in COMMITTEE_ROLES:
 
-        with col2:
-            name = st.text_input(
-                "Name",
-                value=current.get("Name", ""),
-                key=f"committee_{position}_{role_key}_name",
-                placeholder="Enter full name",
-            )
+                    if role not in existing_roles:
 
-        with col3:
-            designation = st.text_input(
-                "Designation",
-                value=current.get("Designation", ""),
-                key=f"committee_{position}_{role_key}_designation",
-                placeholder="Enter designation",
-            )
+                        committee.append(
+                            {
+                                "role": role,
+                                "erp": "",
+                                "name": "",
+                                "designation": "",
+                            }
+                        )
 
-        committee_data[role] = {
-            "ERP#": erp,
-            "Name": name,
-            "Designation": designation,
-        }
+                for member_index, member in enumerate(
+                    committee
+                ):
 
-    item["committee"] = committee_data
+                    role = member.get(
+                        "role",
+                        "",
+                    )
 
-    st.markdown(
-        """
-        <div style="
-            background:#eff6ff;
-            border-left:4px solid #2563eb;
-            padding:10px 14px;
-            border-radius:8px;
-            color:#1e3a8a;
-            margin-top:12px;
-        ">
-            <b>Tip:</b> Each shaded block represents one specific committee role.
-            Enter the ERP#, Name and Designation only for that role.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+                    if role not in COMMITTEE_ROLES:
+                        continue
 
-    continue
+                    # -------------------------------------------------
+                    # ROLE CARD
+                    # -------------------------------------------------
 
-            # ------------------------------------------------
-            # Q&A
-            # ------------------------------------------------
+                    st.markdown(
+                        f"""
+                        <div class="committee-role-card">
+                            <div class="committee-role-title">
+                                👤 {role}
+                            </div>
+                            <div class="committee-role-description">
+                                Enter the details of the person serving in this role.
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    role_key = (
+                        role.lower()
+                        .replace(
+                            " ",
+                            "_",
+                        )
+                        .replace(
+                            "#",
+                            "no",
+                        )
+                    )
+
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+
+                        erp = st.text_input(
+                            "ERP#",
+                            value=member.get(
+                                "erp",
+                                "",
+                            ),
+                            key=(
+                                f"committee_"
+                                f"{position}_"
+                                f"{role_key}_erp"
+                            ),
+                            placeholder="Enter ERP#",
+                        )
+
+                    with col2:
+
+                        name = st.text_input(
+                            "Name",
+                            value=member.get(
+                                "name",
+                                "",
+                            ),
+                            key=(
+                                f"committee_"
+                                f"{position}_"
+                                f"{role_key}_name"
+                            ),
+                            placeholder="Enter full name",
+                        )
+
+                    with col3:
+
+                        designation = st.text_input(
+                            "Designation",
+                            value=member.get(
+                                "designation",
+                                "",
+                            ),
+                            key=(
+                                f"committee_"
+                                f"{position}_"
+                                f"{role_key}_designation"
+                            ),
+                            placeholder="Enter designation",
+                        )
+
+                    member["erp"] = erp
+                    member["name"] = name
+                    member["designation"] = designation
+
+                item["committee"] = committee
+
+                st.info(
+                    "Each role is shown in its own shaded box. "
+                    "For example, the ERP#, Name and Designation "
+                    "directly below “Convener of Inquiry” belong "
+                    "to the Convener."
+                )
+
+                if st.button(
+                    "🗑 Remove this section",
+                    key=f"remove_committee_{position}",
+                ):
+
+                    del st.session_state.index_data[
+                        position
+                    ]
+
+                    st.rerun()
+
+                continue
+
+            # =================================================
+            # QUESTIONS / ANSWERS
+            # =================================================
 
             if base_name == (
                 "Questions / Answers with the Accused"
@@ -2380,9 +2458,9 @@ elif st.session_state.document_type == "Inquiry":
 
             else:
 
-                # ------------------------------------------------
+                # =================================================
                 # VOICE + TEXT
-                # ------------------------------------------------
+                # =================================================
 
                 text_key = (
                     f"inquiry_text_{position}"
@@ -2414,7 +2492,6 @@ elif st.session_state.document_type == "Inquiry":
                     key=audio_key,
                 )
 
-                # IMPORTANT:
                 # Process voice BEFORE text widget.
 
                 if audio is not None:
@@ -2508,9 +2585,9 @@ elif st.session_state.document_type == "Inquiry":
 
                 item["content"] = current_content
 
-            # ------------------------------------------------
-            # REMOVE
-            # ------------------------------------------------
+            # =================================================
+            # REMOVE NORMAL SECTION
+            # =================================================
 
             if st.button(
                 "🗑 Remove this section",
@@ -2531,9 +2608,9 @@ elif st.session_state.document_type == "Inquiry":
             "you need."
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # FINAL GENERATE BUTTON
-    # --------------------------------------------------------
+    # ========================================================
 
     st.divider()
 
@@ -2590,9 +2667,9 @@ if st.session_state.generated_draft:
         "Review, edit and export your generated document."
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # EDITOR SYNC BEFORE WIDGET
-    # --------------------------------------------------------
+    # ========================================================
 
     if st.session_state.get(
         "editor_sync",
@@ -2621,9 +2698,9 @@ if st.session_state.generated_draft:
         height=550,
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SAVE / RESTORE
-    # --------------------------------------------------------
+    # ========================================================
 
     col1, col2 = st.columns(2)
 
@@ -2663,9 +2740,9 @@ if st.session_state.generated_draft:
 
             st.rerun()
 
-    # --------------------------------------------------------
+    # ========================================================
     # AI EDIT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
         "✦ AI Editing Assistant"
@@ -2722,9 +2799,9 @@ if st.session_state.generated_draft:
 
                 st.rerun()
 
-    # --------------------------------------------------------
+    # ========================================================
     # EXPORT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
         "📤 Export"
@@ -2828,4 +2905,4 @@ st.caption(
 
 st.caption(
     "Developed by: Raees Khan — Assistant Director, NADRA"
-            )
+                )
