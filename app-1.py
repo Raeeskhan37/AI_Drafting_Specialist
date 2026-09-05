@@ -2404,89 +2404,153 @@ elif st.session_state.document_type == "Inquiry":
             # Inquiry Committee
             # ------------------------------------------------
 
-            if base_name == "Inquiry Committee":
+    if base_name == "Inquiry Committee":
 
-                st.caption(
-                    "Enter details only for committee members that actually exist."
-                )
+    st.markdown(
+        """
+        <div style="
+            background: linear-gradient(135deg, #eef2ff, #f8fafc);
+            border: 1px solid #c7d2fe;
+            border-radius: 16px;
+            padding: 18px;
+            margin-bottom: 15px;
+        ">
+            <div style="
+                font-size: 1.05rem;
+                font-weight: 800;
+                color: #1e293b;
+                margin-bottom: 5px;
+            ">
+                👥 Inquiry Committee
+            </div>
 
-                committee = item.get(
-                    "committee",
-                    [],
-                )
+            <div style="
+                font-size: 0.82rem;
+                color: #64748b;
+            ">
+                Enter the ERP#, name and designation of each committee
+                member. Leave fields blank when a particular member
+                is not applicable.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                while len(committee) < len(
-                    COMMITTEE_ROLES
-                ):
-                    role = COMMITTEE_ROLES[
-                        len(committee)
-                    ]
+    committee = item.get(
+        "committee",
+        []
+    )
 
-                    committee.append(
-                        {
-                            "role": role,
-                            "erp": "",
-                            "name": "",
-                            "designation": "",
-                        }
-                    )
+    # Create four committee roles if they don't already exist
+    while len(committee) < len(COMMITTEE_ROLES):
 
-                for member_index, role in enumerate(
-                    COMMITTEE_ROLES
-                ):
+        role = COMMITTEE_ROLES[len(committee)]
 
-                    member = committee[
-                        member_index
-                    ]
+        committee.append(
+            {
+                "role": role,
+                "erp": "",
+                "name": "",
+                "designation": "",
+            }
+        )
 
-                    st.markdown(
-                        f"**{role}**"
-                    )
+    for member_index, role in enumerate(COMMITTEE_ROLES):
 
-                    c1, c2, c3 = st.columns(3)
+        member = committee[member_index]
 
-                    with c1:
-                        member["erp"] = st.text_input(
-                            "ERP#",
-                            value=member.get(
-                                "erp",
-                                "",
-                            ),
-                            key=(
-                                f"committee_erp_"
-                                f"{position}_{member_index}"
-                            ),
-                        )
+        # ----------------------------------------------------
+        # Role heading
+        # ----------------------------------------------------
 
-                    with c2:
-                        member["name"] = st.text_input(
-                            "Name",
-                            value=member.get(
-                                "name",
-                                "",
-                            ),
-                            key=(
-                                f"committee_name_"
-                                f"{position}_{member_index}"
-                            ),
-                        )
+        st.markdown(
+            f"""
+            <div style="
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-left: 5px solid #6366f1;
+                border-radius: 12px;
+                padding: 12px 15px;
+                margin-top: 14px;
+                margin-bottom: 8px;
+                box-shadow: 0 3px 12px rgba(15,23,42,0.04);
+            ">
+                <div style="
+                    font-size: 0.98rem;
+                    font-weight: 800;
+                    color: #1e293b;
+                ">
+                    {role}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-                    with c3:
-                        member["designation"] = st.text_input(
-                            "Designation",
-                            value=member.get(
-                                "designation",
-                                "",
-                            ),
-                            key=(
-                                f"committee_designation_"
-                                f"{position}_{member_index}"
-                            ),
-                        )
+        c1, c2, c3 = st.columns(3)
 
-                item["committee"] = committee
+        # ----------------------------------------------------
+        # ERP
+        # ----------------------------------------------------
 
-                continue
+        with c1:
+
+            member["erp"] = st.text_input(
+                "ERP#",
+                value=member.get(
+                    "erp",
+                    "",
+                ),
+                key=(
+                    f"committee_erp_"
+                    f"{position}_{member_index}"
+                ),
+                placeholder="Enter ERP#",
+            )
+
+        # ----------------------------------------------------
+        # NAME
+        # ----------------------------------------------------
+
+        with c2:
+
+            member["name"] = st.text_input(
+                "Name",
+                value=member.get(
+                    "name",
+                    "",
+                ),
+                key=(
+                    f"committee_name_"
+                    f"{position}_{member_index}"
+                ),
+                placeholder="Enter name",
+            )
+
+        # ----------------------------------------------------
+        # DESIGNATION
+        # ----------------------------------------------------
+
+        with c3:
+
+            member["designation"] = st.text_input(
+                "Designation",
+                value=member.get(
+                    "designation",
+                    "",
+                ),
+                key=(
+                    f"committee_designation_"
+                    f"{position}_{member_index}"
+                ),
+                placeholder="Enter designation",
+            )
+
+    item["committee"] = committee
+
+    continue
+    
 
             # ------------------------------------------------
             # Normal indexes
