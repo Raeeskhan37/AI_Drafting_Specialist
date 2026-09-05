@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # ============================================================
-# CONFIGURATION
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -23,6 +23,11 @@ st.set_page_config(
     page_icon="📝",
     layout="wide",
 )
+
+
+# ============================================================
+# APPLICATION CONFIGURATION
+# ============================================================
 
 GROQ_MODEL = "openai/gpt-oss-120b"
 WHISPER_MODEL = "whisper-large-v3"
@@ -32,29 +37,34 @@ GEMINI_URL = (
     "v1beta/models/gemini-2.0-flash:generateContent"
 )
 
-DOC_TYPES = [
+DOCUMENT_TYPES = [
     "Email",
-    "Formal Letter",
-    "Business Report",
-    "Cover Letter",
+    "Letter",
+    "Inquiry",
     "Custom",
+]
+
+INQUIRY_TYPES = [
+    "FFI Inquiry",
+    "E&D Inquiry",
+]
+
+OUTPUT_LANGUAGES = [
+    "English",
+    "Urdu",
+    "Pashto",
+    "Arabic",
+    "Same as input",
 ]
 
 TONES = [
     "Formal",
+    "Professional",
     "Friendly/Casual",
     "Persuasive",
     "Apologetic",
     "Assertive",
     "Neutral",
-]
-
-OUTPUT_LANGUAGES = [
-    "Same as spoken language",
-    "English",
-    "Urdu",
-    "Pashto",
-    "Arabic",
 ]
 
 DB_PATH = os.path.join(
@@ -70,8 +80,16 @@ DB_PATH = os.path.join(
 if "generated_draft" not in st.session_state:
     st.session_state.generated_draft = ""
 
-if "voice_transcript" not in st.session_state:
-    st.session_state.voice_transcript = ""
+if "inquiry_indexes" not in st.session_state:
+    st.session_state.inquiry_indexes = [
+        {
+            "title": "Index 1",
+            "text": "",
+        }
+    ]
+
+if "voice_counter" not in st.session_state:
+    st.session_state.voice_counter = 0
 
 
 # ============================================================
@@ -95,6 +113,7 @@ def init_db():
             CREATE TABLE drafts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_type TEXT,
+                inquiry_type TEXT,
                 tone TEXT,
                 recipient TEXT,
                 sender TEXT,
@@ -105,8 +124,11 @@ def init_db():
             )
             """
         )
+
     else:
-        cursor.execute("PRAGMA table_info(drafts)")
+        cursor.execute(
+            "PRAGMA table_info(drafts)"
+        )
 
         existing_columns = set()
 
@@ -115,6 +137,7 @@ def init_db():
 
         required_columns = {
             "document_type": "TEXT",
+            "inquiry_type": "TEXT",
             "tone": "TEXT",
             "recipient": "TEXT",
             "sender": "TEXT",
@@ -125,13 +148,16 @@ def init_db():
         }
 
         for column, data_type in required_columns.items():
+
             if column not in existing_columns:
+
                 sql = (
                     "ALTER TABLE drafts ADD COLUMN "
                     + column
                     + " "
                     + data_type
                 )
+
                 cursor.execute(sql)
 
     conn.commit()
@@ -140,6 +166,7 @@ def init_db():
 
 def save_draft(
     document_type,
+    inquiry_type,
     tone,
     recipient,
     sender,
@@ -154,6 +181,7 @@ def save_draft(
         """
         INSERT INTO drafts (
             document_type,
+            inquiry_type,
             tone,
             recipient,
             sender,
@@ -162,17 +190,20 @@ def save_draft(
             draft,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             document_type,
+            inquiry_type,
             tone,
             recipient,
             sender,
             subject,
             key_points,
             draft,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
         ),
     )
 
@@ -189,6 +220,7 @@ def get_history():
         SELECT
             id,
             document_type,
+            inquiry_type,
             tone,
             recipient,
             sender,
@@ -208,7 +240,6 @@ def get_history():
     return rows
 
 
-# Initialize database before anything uses it.
 init_db()
 
 
@@ -218,49 +249,74 @@ init_db()
 
 def get_secret(name):
     try:
-        return st.secrets.get(name, "")
+        return st.secrets.get(
+            name,
+            "",
+        )
     except Exception:
         return ""
 
 
 def get_api_key(provider):
-    if provider == "Groq (Llama 3.3)":
-        return get_secret("GROQ_API_KEY")
 
-    return get_secret("GEMINI_API_KEY")
+    if provider == "Groq":
+
+        return get_secret(
+            "GROQ_API_KEY"
+        )
+
+    return get_secret(
+        "GEMINI_API_KEY"
+    )
 
 
 # ============================================================
-# VOICE TO TEXT
+# VOICE TRANSCRIPTION
 # ============================================================
 
-def transcribe_audio(api_key, audio_file):
+def transcribe_audio(
+    api_key,
+    audio_file,
+):
+
     if not api_key:
+
         raise ValueError(
-            "GROQ_API_KEY is not configured in Streamlit Secrets."
+            "GROQ_API_KEY is not configured "
+            "in Streamlit Secrets."
         )
 
     if audio_file is None:
+
         raise ValueError(
             "No audio recording was provided."
         )
 
     try:
+
         from groq import Groq
 
-        client = Groq(api_key=api_key)
+        client = Groq(
+            api_key=api_key
+        )
 
-        audio_bytes = audio_file.getvalue()
+        audio_bytes = (
+            audio_file.getvalue()
+        )
 
         if not audio_bytes:
+
             raise ValueError(
                 "The recording is empty."
             )
 
-        if len(audio_bytes) > 25 * 1024 * 1024:
+        if len(audio_bytes) > (
+            25 * 1024 * 1024
+        ):
+
             raise ValueError(
-                "The recording is larger than 25 MB. "
-                "Please make a shorter recording."
+                "The recording is larger than "
+                "25 MB. Please make a shorter recording."
             )
 
         filename = getattr(
@@ -270,13 +326,19 @@ def transcribe_audio(api_key, audio_file):
         )
 
         if not filename:
+
             filename = "recording.wav"
 
-        result = client.audio.transcriptions.create(
-            file=(filename, audio_bytes),
-            model=WHISPER_MODEL,
-            response_format="json",
-            temperature=0.0,
+        result = (
+            client.audio.transcriptions.create(
+                file=(
+                    filename,
+                    audio_bytes,
+                ),
+                model=WHISPER_MODEL,
+                response_format="json",
+                temperature=0.0,
+            )
         )
 
         text = getattr(
@@ -286,6 +348,7 @@ def transcribe_audio(api_key, audio_file):
         )
 
         if not text:
+
             raise RuntimeError(
                 "No speech could be detected."
             )
@@ -293,41 +356,99 @@ def transcribe_audio(api_key, audio_file):
         return text.strip()
 
     except Exception as e:
+
         raise RuntimeError(
-            "Speech-to-text error: " + str(e)
+            "Speech-to-text error: "
+            + str(e)
         ) from e
 
 
 # ============================================================
-# PROMPT BUILDER
+# AI PROMPT
 # ============================================================
 
 def build_prompt(
     document_type,
+    inquiry_type,
     tone,
     recipient,
     sender,
     subject,
-    key_points,
+    information,
     output_language,
 ):
-    if output_language == "Same as spoken language":
+
+    if output_language == "Same as input":
+
         language_instruction = (
-            "Write the final document in the same language "
-            "as the user's content. Preserve the intended meaning."
+            "Write the final document in the same "
+            "language used by the user. If multiple "
+            "languages are used, use the dominant "
+            "language unless the context clearly "
+            "requires otherwise."
         )
+
     else:
+
         language_instruction = (
-            "Write the final document entirely in "
+            "Write the entire final document in "
             + output_language
-            + ". Translate and professionally adapt the "
-              "user's content while preserving its meaning."
+            + ". Translate and professionally adapt "
+              "the supplied information while preserving "
+              "its exact intended meaning."
         )
+
+    inquiry_instruction = ""
+
+    if document_type == "Inquiry":
+
+        inquiry_instruction = f"""
+This is an official {inquiry_type}.
+
+The user's information is organized into multiple
+inquiry indexes.
+
+Treat every index as an important part of the inquiry.
+
+Do not unnecessarily remove or merge indexes.
+
+Maintain the logical sequence of the indexes.
+
+Use appropriate official and professional inquiry
+language.
+
+Clearly distinguish allegations, statements,
+facts, evidence, observations, findings and
+recommendations when the supplied information
+supports such distinctions.
+
+Do not invent evidence, statements, dates, names,
+findings or conclusions.
+
+If the user has not supplied a fact, do not create it.
+
+For E&D inquiries, maintain a professional
+departmental disciplinary inquiry style.
+
+For FFI inquiries, maintain a professional
+fact-finding inquiry style.
+
+Where appropriate, create headings and subheadings
+based on the supplied indexes.
+"""
 
     prompt = f"""
-You are an expert professional writer and editor.
+You are an expert professional writer,
+official correspondence specialist and
+inquiry-document drafting assistant.
 
-Create a polished, professional {document_type}.
+Create a polished and professional {document_type}.
+
+Document type:
+{document_type}
+
+Inquiry type:
+{inquiry_type}
 
 Tone:
 {tone}
@@ -342,7 +463,7 @@ Subject:
 {subject}
 
 User information:
-{key_points}
+{information}
 
 Desired output language:
 {output_language}
@@ -350,76 +471,133 @@ Desired output language:
 Language instruction:
 {language_instruction}
 
-Requirements:
+{inquiry_instruction}
 
-1. Maintain the requested tone.
-2. Preserve the user's intended meaning.
+General requirements:
+
+1. Preserve the user's intended meaning.
+
+2. Correct grammar, spelling and obvious
+speech-recognition errors.
+
 3. Do not invent important facts.
-4. Organize the document logically.
-5. Correct grammar and spelling.
-6. Make the document ready to use.
-7. For letters and emails, include an appropriate greeting and closing.
-8. Do not add explanations before or after the document.
-9. Do not use markdown code blocks.
-10. Keep useful placeholders such as [Date] or [Company Name].
-11. Correct obvious speech-recognition errors when the intended meaning is clear.
-12. Return only the finished document.
+
+4. Do not fabricate names, dates, evidence,
+statements, allegations or findings.
+
+5. Organize the information logically.
+
+6. Use professional official language.
+
+7. Make the document ready for practical use.
+
+8. Keep useful placeholders such as
+[Date], [Reference], [Office Name] or
+[Designation] when information is missing.
+
+9. For Email, include an appropriate greeting
+and closing.
+
+10. For Letter, use appropriate official
+letter structure.
+
+11. For Inquiry, preserve the supplied
+index structure and use appropriate
+professional inquiry headings.
+
+12. Return only the completed document.
+
+13. Do not add explanations before or after
+the document.
+
+14. Do not use markdown code blocks.
+
+15. Do not claim facts that are not contained
+in the user's information.
+
+16. If information is incomplete, use a suitable
+placeholder instead of inventing information.
 """
 
     return prompt.strip()
 
 
 # ============================================================
-# GROQ TEXT GENERATION
+# GROQ GENERATION
 # ============================================================
 
-def call_groq(api_key, prompt):
+def call_groq(
+    api_key,
+    prompt,
+):
+
     if not api_key:
+
         raise ValueError(
-            "GROQ_API_KEY is not configured in Streamlit Secrets."
+            "GROQ_API_KEY is not configured "
+            "in Streamlit Secrets."
         )
 
     try:
+
         from groq import Groq
 
         client = Groq(
             api_key=api_key
         )
 
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert professional "
-                        "writer and editor."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            temperature=0.6,
+        response = (
+            client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert "
+                            "professional writer "
+                            "and official document "
+                            "drafting specialist."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0.4,
+            )
         )
 
-        return response.choices[0].message.content.strip()
+        return (
+            response
+            .choices[0]
+            .message
+            .content
+            .strip()
+        )
 
     except Exception as e:
+
         raise RuntimeError(
-            "Groq API error: " + str(e)
+            "Groq API error: "
+            + str(e)
         ) from e
 
 
 # ============================================================
-# GEMINI TEXT GENERATION
+# GEMINI GENERATION
 # ============================================================
 
-def call_gemini(api_key, prompt):
+def call_gemini(
+    api_key,
+    prompt,
+):
+
     if not api_key:
+
         raise ValueError(
-            "GEMINI_API_KEY is not configured in Streamlit Secrets."
+            "GEMINI_API_KEY is not configured "
+            "in Streamlit Secrets."
         )
 
     headers = {
@@ -438,9 +616,14 @@ def call_gemini(api_key, prompt):
         ]
     }
 
-    url = GEMINI_URL + "?key=" + api_key
+    url = (
+        GEMINI_URL
+        + "?key="
+        + api_key
+    )
 
     try:
+
         response = requests.post(
             url,
             headers=headers,
@@ -449,6 +632,7 @@ def call_gemini(api_key, prompt):
         )
 
         if response.status_code != 200:
+
             raise RuntimeError(
                 "Gemini API error: "
                 + response.text
@@ -462,31 +646,34 @@ def call_gemini(api_key, prompt):
         )
 
         if not candidates:
+
             raise RuntimeError(
                 "Gemini returned no response."
             )
 
-        parts = candidates[0].get(
-            "content",
-            {},
-        ).get(
-            "parts",
-            [],
+        parts = (
+            candidates[0]
+            .get("content", {})
+            .get("parts", [])
         )
 
         if not parts:
+
             raise RuntimeError(
                 "Gemini returned an empty response."
             )
 
-        return parts[0].get(
-            "text",
-            "",
-        ).strip()
+        return (
+            parts[0]
+            .get("text", "")
+            .strip()
+        )
 
     except requests.RequestException as e:
+
         raise RuntimeError(
-            "Gemini connection error: " + str(e)
+            "Gemini connection error: "
+            + str(e)
         ) from e
 
 
@@ -495,6 +682,7 @@ def call_gemini(api_key, prompt):
 # ============================================================
 
 def clean_pdf_text(text):
+
     replacements = {
         "\u2018": "'",
         "\u2019": "'",
@@ -510,52 +698,76 @@ def clean_pdf_text(text):
     }
 
     for old, new in replacements.items():
+
         text = text.replace(
             old,
             new,
         )
 
-    return text.encode(
-        "latin-1",
-        "replace",
-    ).decode(
-        "latin-1"
+    return (
+        text.encode(
+            "latin-1",
+            "replace",
+        )
+        .decode("latin-1")
     )
 
 
-def wrap_pdf_line(pdf, text, max_width):
+def wrap_pdf_line(
+    pdf,
+    text,
+    max_width,
+):
+
     if not text:
+
         return [""]
 
-    words = text.split(" ")
+    words = text.split(
+        " "
+    )
 
     lines = []
     current = ""
 
     for word in words:
+
         test_line = (
             word
             if not current
             else current + " " + word
         )
 
-        if pdf.get_string_width(
-            test_line
-        ) <= max_width:
+        if (
+            pdf.get_string_width(
+                test_line
+            )
+            <= max_width
+        ):
+
             current = test_line
+
         else:
+
             if current:
-                lines.append(current)
+
+                lines.append(
+                    current
+                )
 
             current = word
 
     if current:
-        lines.append(current)
+
+        lines.append(
+            current
+        )
 
     return lines
 
 
 def export_pdf(text):
+
     pdf = FPDF()
 
     pdf.set_auto_page_break(
@@ -571,7 +783,9 @@ def export_pdf(text):
     )
 
     usable_width = (
-        pdf.w - pdf.l_margin - pdf.r_margin
+        pdf.w
+        - pdf.l_margin
+        - pdf.r_margin
     )
 
     cleaned_text = clean_pdf_text(
@@ -583,8 +797,11 @@ def export_pdf(text):
     )
 
     for paragraph in paragraphs:
+
         if paragraph.strip() == "":
+
             pdf.ln(5)
+
             continue
 
         lines = wrap_pdf_line(
@@ -594,6 +811,7 @@ def export_pdf(text):
         )
 
         for line in lines:
+
             pdf.multi_cell(
                 usable_width,
                 7,
@@ -612,20 +830,31 @@ def export_pdf(text):
 # ============================================================
 
 def export_docx(text):
+
     document = Document()
 
     section = document.sections[0]
 
-    section.top_margin = Inches(0.75)
-    section.bottom_margin = Inches(0.75)
-    section.left_margin = Inches(0.8)
-    section.right_margin = Inches(0.8)
-
-    paragraphs = text.split(
-        "\n"
+    section.top_margin = Inches(
+        0.75
     )
 
-    for paragraph in paragraphs:
+    section.bottom_margin = Inches(
+        0.75
+    )
+
+    section.left_margin = Inches(
+        0.8
+    )
+
+    section.right_margin = Inches(
+        0.8
+    )
+
+    for paragraph in text.split(
+        "\n"
+    ):
+
         document.add_paragraph(
             paragraph
         )
@@ -646,6 +875,7 @@ def export_docx(text):
 # ============================================================
 
 def export_txt(text):
+
     return text.encode(
         "utf-8"
     )
@@ -656,23 +886,28 @@ def export_txt(text):
 # ============================================================
 
 def export_png(text):
+
     try:
+
         font = ImageFont.truetype(
             "DejaVuSans.ttf",
             24,
         )
+
     except Exception:
+
         font = ImageFont.load_default()
 
     margin = 50
     line_spacing = 12
     max_width = 1100
 
-    lines = []
-
     dummy_image = Image.new(
         "RGB",
-        (max_width, 100),
+        (
+            max_width,
+            100,
+        ),
         "white",
     )
 
@@ -680,18 +915,26 @@ def export_png(text):
         dummy_image
     )
 
+    lines = []
+
     for paragraph in text.split(
         "\n"
     ):
-        words = paragraph.split(" ")
+
+        if paragraph == "":
+
+            lines.append("")
+
+            continue
+
+        words = paragraph.split(
+            " "
+        )
 
         current = ""
 
-        if not words:
-            lines.append("")
-            continue
-
         for word in words:
+
             test_line = (
                 word
                 if not current
@@ -704,14 +947,22 @@ def export_png(text):
                 font=font,
             )
 
-            width = bbox[2] - bbox[0]
+            width = (
+                bbox[2]
+                - bbox[0]
+            )
 
-            if width <= max_width - (
-                margin * 2
+            if width <= (
+                max_width
+                - margin * 2
             ):
+
                 current = test_line
+
             else:
+
                 if current:
+
                     lines.append(
                         current
                     )
@@ -719,18 +970,23 @@ def export_png(text):
                 current = word
 
         if current:
+
             lines.append(
                 current
             )
 
         lines.append("")
 
-    line_height = 36
+    line_height = (
+        36
+        + line_spacing
+    )
 
     height = max(
         200,
         margin * 2
-        + len(lines) * line_height,
+        + len(lines)
+        * line_height,
     )
 
     image = Image.new(
@@ -749,6 +1005,7 @@ def export_png(text):
     y = margin
 
     for line in lines:
+
         draw.text(
             (
                 margin,
@@ -779,7 +1036,9 @@ def export_png(text):
 
 with st.sidebar:
 
-    st.title("📝 DraftForge")
+    st.title(
+        "📝 DraftForge"
+    )
 
     st.caption(
         "AI Document Composer"
@@ -794,7 +1053,7 @@ with st.sidebar:
     provider = st.selectbox(
         "Choose AI provider",
         [
-            "Groq (Llama 3.3)",
+            "Groq",
             "Google Gemini",
         ],
     )
@@ -804,16 +1063,22 @@ with st.sidebar:
     )
 
     if api_key:
+
         st.success(
             "🔐 API key loaded securely."
         )
+
     else:
-        if provider == "Groq (Llama 3.3)":
+
+        if provider == "Groq":
+
             st.warning(
                 "GROQ_API_KEY not found "
                 "in Streamlit Secrets."
             )
+
         else:
+
             st.warning(
                 "GEMINI_API_KEY not found "
                 "in Streamlit Secrets."
@@ -841,15 +1106,17 @@ with st.sidebar:
     if history:
 
         st.caption(
-            f"{len(history)} saved draft(s)"
+            str(len(history))
+            + " saved draft(s)"
         )
 
         for row in history[:10]:
 
             draft_id = row[0]
             document_type = row[1]
-            subject = row[5]
-            created_at = row[8]
+            inquiry_type = row[2]
+            subject = row[6]
+            created_at = row[9]
 
             title = (
                 subject
@@ -862,26 +1129,38 @@ with st.sidebar:
             ):
 
                 st.write(
-                    f"**Type:** {document_type}"
+                    "**Type:** "
+                    + str(document_type)
                 )
 
-                st.write(
-                    f"**Subject:** "
-                    f"{subject or 'N/A'}"
-                )
+                if inquiry_type:
+
+                    st.write(
+                        "**Inquiry:** "
+                        + str(inquiry_type)
+                    )
+
+                if subject:
+
+                    st.write(
+                        "**Subject:** "
+                        + str(subject)
+                    )
 
                 if st.button(
                     "Load Draft",
                     key=f"load_{draft_id}",
                     use_container_width=True,
                 ):
+
                     st.session_state.generated_draft = (
-                        row[7] or ""
+                        row[8] or ""
                     )
 
                     st.rerun()
 
     else:
+
         st.caption(
             "No drafts saved yet."
         )
@@ -889,7 +1168,8 @@ with st.sidebar:
     st.divider()
 
     st.caption(
-        "DraftForge • AI-powered document creation"
+        "DraftForge • AI-powered "
+        "professional document creation"
     )
 
 
@@ -902,44 +1182,84 @@ st.title(
 )
 
 st.write(
-    "Create professional emails, letters, reports "
-    "and other documents using AI."
+    "Create professional emails, letters, "
+    "inquiries and custom documents using "
+    "text or multilingual voice input."
 )
 
 st.divider()
 
 
 # ============================================================
-# DOCUMENT SETTINGS
+# DOCUMENT TYPE
+# ============================================================
+
+st.subheader(
+    "📄 Document Settings"
+)
+
+document_type = st.selectbox(
+    "Document Type",
+    DOCUMENT_TYPES,
+)
+
+
+# ============================================================
+# INQUIRY TYPE
+# ============================================================
+
+inquiry_type = ""
+
+if document_type == "Inquiry":
+
+    inquiry_type = st.selectbox(
+        "🔎 Inquiry Type",
+        INQUIRY_TYPES,
+    )
+
+    if inquiry_type == "FFI Inquiry":
+
+        st.info(
+            "FFI Inquiry: Add as many inquiry "
+            "indexes as required for the "
+            "fact-finding inquiry."
+        )
+
+    else:
+
+        st.info(
+            "E&D Inquiry: Add as many inquiry "
+            "indexes as required for the "
+            "departmental disciplinary inquiry."
+        )
+
+
+# ============================================================
+# TONE
+# ============================================================
+
+tone = st.selectbox(
+    "🎯 Tone",
+    TONES,
+)
+
+
+# ============================================================
+# BASIC DETAILS
 # ============================================================
 
 col1, col2 = st.columns(2)
 
 with col1:
 
-    document_type = st.selectbox(
-        "📄 Document Type",
-        DOC_TYPES,
+    recipient = st.text_input(
+        "👤 Recipient",
+        placeholder=(
+            "e.g. Manager / Director / Officer"
+        ),
     )
 
 with col2:
-
-    tone = st.selectbox(
-        "🎯 Tone",
-        TONES,
-    )
-
-
-col3, col4 = st.columns(2)
-
-with col3:
-
-    recipient = st.text_input(
-        "👤 Recipient",
-        placeholder="e.g. Manager",
-    )
-
-with col4:
 
     sender = st.text_input(
         "✍️ Sender",
@@ -949,75 +1269,69 @@ with col4:
 
 subject = st.text_input(
     "📌 Subject",
-    placeholder="Enter document subject",
+    placeholder="Enter subject",
 )
 
 
 # ============================================================
-# INPUT MODE
+# OUTPUT LANGUAGE
 # ============================================================
 
-st.subheader(
-    "💬 Provide Your Information"
-)
-
-input_mode = st.radio(
-    "Choose how you want to provide the information",
-    [
-        "⌨️ Type",
-        "🎙️ Speak",
-    ],
-    horizontal=True,
+output_language = st.selectbox(
+    "🌐 Desired Output Language",
+    OUTPUT_LANGUAGES,
 )
 
 
 # ============================================================
-# TYPE MODE
+# NORMAL DOCUMENT INPUT
 # ============================================================
 
-if input_mode == "⌨️ Type":
+def normal_information_box():
 
-    key_points = st.text_area(
-        "📝 Key Points / Details",
-        height=220,
+    st.markdown(
+        "### 📝 Information"
+    )
+
+    st.caption(
+        "Type your information or use the microphone. "
+        "Voice transcription will be added to this "
+        "same text box."
+    )
+
+    text_key = "normal_information"
+
+    if text_key not in st.session_state:
+
+        st.session_state[text_key] = ""
+
+    typed_text = st.text_area(
+        "Type or edit your information",
+        value=st.session_state[text_key],
+        height=250,
+        key="normal_information_editor",
         placeholder=(
-            "Describe what you want the document to say..."
+            "Type your request here..."
         ),
     )
 
+    st.session_state[text_key] = typed_text
 
-# ============================================================
-# VOICE MODE
-# ============================================================
-
-else:
-
-    selected_output_language = st.selectbox(
-        "🌐 Desired output language",
-        OUTPUT_LANGUAGES,
+    st.markdown(
+        "#### 🎙️ Add information by voice"
     )
 
-    st.info(
-        "Speak naturally in your preferred language. "
-        "DraftForge will convert your speech to text "
-        "and then generate the requested document."
-    )
-
-    voice_audio = st.audio_input(
-        "🎙️ Record your request",
+    audio = st.audio_input(
+        "Record your voice",
         sample_rate=16000,
-        key="voice_recorder",
+        key="normal_voice_recorder",
     )
 
-    if voice_audio is not None:
-
-        st.audio(
-            voice_audio
-        )
+    if audio is not None:
 
         if st.button(
-            "📝 Transcribe Voice",
-            type="secondary",
+            "🎙️ Add Voice to Text Box",
+            key="normal_transcribe",
             use_container_width=True,
         ):
 
@@ -1035,23 +1349,48 @@ else:
             else:
 
                 with st.spinner(
-                    "🎙️ Converting speech to text..."
+                    "🎙️ Transcribing voice..."
                 ):
 
                     try:
 
-                        transcript = transcribe_audio(
-                            groq_key,
-                            voice_audio,
+                        transcript = (
+                            transcribe_audio(
+                                groq_key,
+                                audio,
+                            )
                         )
 
-                        st.session_state.voice_transcript = (
-                            transcript
+                        current_text = (
+                            st.session_state.get(
+                                "normal_information",
+                                "",
+                            )
                         )
+
+                        if current_text.strip():
+
+                            combined_text = (
+                                current_text
+                                + "\n"
+                                + transcript
+                            )
+
+                        else:
+
+                            combined_text = (
+                                transcript
+                            )
+
+                        st.session_state[
+                            "normal_information"
+                        ] = combined_text
 
                         st.success(
-                            "Voice successfully converted to text!"
+                            "Voice added to the text box."
                         )
+
+                        st.rerun()
 
                     except Exception as e:
 
@@ -1059,80 +1398,337 @@ else:
                             str(e)
                         )
 
-    key_points = st.text_area(
-        "📝 Transcribed request - edit if necessary",
-        value=st.session_state.voice_transcript,
-        height=220,
-        key="voice_transcript_editor",
-        placeholder=(
-            "Your spoken request will appear here "
-            "after transcription..."
-        ),
-    )
-
-    st.session_state.voice_transcript = (
-        key_points
+    return st.session_state.get(
+        "normal_information",
+        "",
     )
 
 
 # ============================================================
-# GENERATE BUTTON
+# INQUIRY INPUT
+# ============================================================
+
+def inquiry_information_boxes():
+
+    st.markdown(
+        "### 📑 Inquiry Indexes"
+    )
+
+    st.caption(
+        "Each index can contain information entered "
+        "by typing, voice, or a combination of both."
+    )
+
+    remove_index = None
+
+    for index_number in range(
+        len(
+            st.session_state.inquiry_indexes
+        )
+    ):
+
+        index_data = (
+            st.session_state.inquiry_indexes[
+                index_number
+            ]
+        )
+
+        st.markdown(
+            f"#### 📌 Index {index_number + 1}"
+        )
+
+        title_key = (
+            "inquiry_title_"
+            + str(index_number)
+        )
+
+        text_key = (
+            "inquiry_text_"
+            + str(index_number)
+        )
+
+        if title_key not in st.session_state:
+
+            st.session_state[
+                title_key
+            ] = index_data["title"]
+
+        if text_key not in st.session_state:
+
+            st.session_state[
+                text_key
+            ] = index_data["text"]
+
+        index_title = st.text_input(
+            "Index title",
+            value=st.session_state[
+                title_key
+            ],
+            key=title_key,
+            placeholder=(
+                "e.g. Allegation, Statement "
+                "of accused, Witness statement, "
+                "Documentary evidence"
+            ),
+        )
+
+        index_text = st.text_area(
+            "Type or edit information",
+            value=st.session_state[
+                text_key
+            ],
+            height=180,
+            key=text_key,
+            placeholder=(
+                "Type information for this index..."
+            ),
+        )
+
+        st.session_state.inquiry_indexes[
+            index_number
+        ]["title"] = index_title
+
+        st.session_state.inquiry_indexes[
+            index_number
+        ]["text"] = index_text
+
+        voice_key = (
+            "inquiry_voice_"
+            + str(index_number)
+        )
+
+        transcribe_key = (
+            "inquiry_transcribe_"
+            + str(index_number)
+        )
+
+        audio = st.audio_input(
+            "🎙️ Record voice for this index",
+            sample_rate=16000,
+            key=voice_key,
+        )
+
+        if audio is not None:
+
+            if st.button(
+                "🎙️ Add Voice to This Index",
+                key=transcribe_key,
+                use_container_width=True,
+            ):
+
+                groq_key = get_secret(
+                    "GROQ_API_KEY"
+                )
+
+                if not groq_key:
+
+                    st.error(
+                        "GROQ_API_KEY is not configured "
+                        "in Streamlit Secrets."
+                    )
+
+                else:
+
+                    with st.spinner(
+                        "🎙️ Transcribing voice..."
+                    ):
+
+                        try:
+
+                            transcript = (
+                                transcribe_audio(
+                                    groq_key,
+                                    audio,
+                                )
+                            )
+
+                            current_text = (
+                                st.session_state.get(
+                                    text_key,
+                                    "",
+                                )
+                            )
+
+                            if current_text.strip():
+
+                                combined_text = (
+                                    current_text
+                                    + "\n"
+                                    + transcript
+                                )
+
+                            else:
+
+                                combined_text = (
+                                    transcript
+                                )
+
+                            st.session_state[
+                                text_key
+                            ] = combined_text
+
+                            st.session_state.inquiry_indexes[
+                                index_number
+                            ]["text"] = (
+                                combined_text
+                            )
+
+                            st.success(
+                                "Voice added to Index "
+                                + str(index_number + 1)
+                                + "."
+                            )
+
+                            st.rerun()
+
+                        except Exception as e:
+
+                            st.error(
+                                str(e)
+                            )
+
+        if len(
+            st.session_state.inquiry_indexes
+        ) > 1:
+
+            if st.button(
+                "🗑️ Remove This Index",
+                key=(
+                    "remove_index_"
+                    + str(index_number)
+                ),
+            ):
+
+                remove_index = (
+                    index_number
+                )
+
+        st.divider()
+
+    if remove_index is not None:
+
+        st.session_state.inquiry_indexes.pop(
+            remove_index
+        )
+
+        st.rerun()
+
+    if st.button(
+        "➕ Add Another Index",
+        use_container_width=True,
+    ):
+
+        new_number = (
+            len(
+                st.session_state.inquiry_indexes
+            )
+            + 1
+        )
+
+        st.session_state.inquiry_indexes.append(
+            {
+                "title": (
+                    "Index "
+                    + str(new_number)
+                ),
+                "text": "",
+            }
+        )
+
+        st.rerun()
+
+    information_parts = []
+
+    for index_number, index_data in enumerate(
+        st.session_state.inquiry_indexes
+    ):
+
+        title = index_data.get(
+            "title",
+            "Index "
+            + str(index_number + 1),
+        )
+
+        text = index_data.get(
+            "text",
+            "",
+        )
+
+        if text.strip():
+
+            information_parts.append(
+                "INDEX "
+                + str(index_number + 1)
+                + ": "
+                + title
+                + "\n"
+                + text
+            )
+
+    return "\n\n".join(
+        information_parts
+    )
+
+
+# ============================================================
+# SELECT INPUT FORM
+# ============================================================
+
+if document_type == "Inquiry":
+
+    information = inquiry_information_boxes()
+
+else:
+
+    information = normal_information_box()
+
+
+# ============================================================
+# GENERATE DOCUMENT
 # ============================================================
 
 st.divider()
 
-generate_button = st.button(
-    "✨ Generate Draft",
+if st.button(
+    "✨ Generate Professional Document",
     type="primary",
     use_container_width=True,
-)
+):
 
-
-if generate_button:
-
-    if not key_points.strip():
+    if not information.strip():
 
         st.warning(
-            "Please provide some information "
+            "Please provide information "
             "by typing or speaking."
         )
 
     elif not api_key:
 
         st.error(
-            "Please configure the selected API key "
-            "in Streamlit Secrets."
+            "Please configure the selected "
+            "AI API key in Streamlit Secrets."
         )
 
     else:
 
-        if input_mode == "🎙️ Speak":
-
-            output_language = (
-                selected_output_language
-            )
-
-        else:
-
-            output_language = "English"
-
         prompt = build_prompt(
             document_type=document_type,
+            inquiry_type=inquiry_type,
             tone=tone,
             recipient=recipient,
             sender=sender,
             subject=subject,
-            key_points=key_points,
+            information=information,
             output_language=output_language,
         )
 
         with st.spinner(
-            "✨ Creating your professional document..."
+            "✨ Preparing your professional document..."
         ):
 
             try:
 
-                if provider == "Groq (Llama 3.3)":
+                if provider == "Groq":
 
                     draft = call_groq(
                         api_key,
@@ -1152,16 +1748,17 @@ if generate_button:
 
                 save_draft(
                     document_type,
+                    inquiry_type,
                     tone,
                     recipient,
                     sender,
                     subject,
-                    key_points,
+                    information,
                     draft,
                 )
 
                 st.success(
-                    "✅ Draft generated and saved successfully!"
+                    "✅ Document generated and saved successfully!"
                 )
 
             except Exception as e:
@@ -1172,7 +1769,7 @@ if generate_button:
 
 
 # ============================================================
-# GENERATED DRAFT
+# GENERATED DOCUMENT
 # ============================================================
 
 if st.session_state.generated_draft:
@@ -1180,14 +1777,14 @@ if st.session_state.generated_draft:
     st.divider()
 
     st.subheader(
-        "✏️ Generated Draft"
+        "✏️ Generated Document"
     )
 
     edited_draft = st.text_area(
-        "Edit your document before exporting",
+        "Review and edit your document",
         value=st.session_state.generated_draft,
-        height=500,
-        key="draft_editor",
+        height=600,
+        key="generated_document_editor",
     )
 
     st.session_state.generated_draft = (
@@ -1197,10 +1794,12 @@ if st.session_state.generated_draft:
     st.divider()
 
     st.subheader(
-        "📤 Export Document"
+        "📤 Export"
     )
 
-    export_col1, export_col2 = st.columns(2)
+    export_col1, export_col2 = st.columns(
+        2
+    )
 
     with export_col1:
 
@@ -1211,7 +1810,9 @@ if st.session_state.generated_draft:
         st.download_button(
             "📕 Download PDF",
             data=pdf_data,
-            file_name="draftforge_document.pdf",
+            file_name=(
+                "draftforge_document.pdf"
+            ),
             mime="application/pdf",
             use_container_width=True,
         )
@@ -1223,7 +1824,9 @@ if st.session_state.generated_draft:
         st.download_button(
             "📘 Download DOCX",
             data=docx_data,
-            file_name="draftforge_document.docx",
+            file_name=(
+                "draftforge_document.docx"
+            ),
             mime=(
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
@@ -1240,7 +1843,9 @@ if st.session_state.generated_draft:
         st.download_button(
             "📄 Download TXT",
             data=txt_data,
-            file_name="draftforge_document.txt",
+            file_name=(
+                "draftforge_document.txt"
+            ),
             mime="text/plain",
             use_container_width=True,
         )
@@ -1252,7 +1857,9 @@ if st.session_state.generated_draft:
         st.download_button(
             "🖼️ Download PNG",
             data=png_data,
-            file_name="draftforge_document.png",
+            file_name=(
+                "draftforge_document.png"
+            ),
             mime="image/png",
             use_container_width=True,
         )
@@ -1265,6 +1872,7 @@ if st.session_state.generated_draft:
 st.divider()
 
 st.caption(
-    "DraftForge — Professional AI document creation "
-    "with text and multilingual voice input."
+    "DraftForge — AI-powered professional "
+    "document creation with multilingual "
+    "text and voice input."
 )
