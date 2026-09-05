@@ -67,6 +67,35 @@ TONES = [
     "Neutral",
 ]
 
+
+# ============================================================
+# E&D INQUIRY INDEXES
+# ============================================================
+
+ED_INDEXES = [
+    "Inquiry Reference No.",
+    "Subject",
+    "Brief of the Inquiry",
+    "Articles of Charge / Allegations",
+    "Statement of the Accused",
+    "Questions / Answers with the Accused",
+    "Statements of Witnesses / Officials",
+    "Documentary Evidence / Record Examined",
+    "Defence / Written Explanation",
+    "Findings",
+    "Findings on Each Charge",
+    "Discussion / Analysis",
+    "Conclusion",
+    "Recommendations",
+    "Documents Recorded",
+    "Inquiry Committee",
+]
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
 DB_PATH = os.path.join(
     os.path.dirname(__file__),
     "drafts.db",
@@ -74,26 +103,42 @@ DB_PATH = os.path.join(
 
 
 # ============================================================
-# SESSION STATE
+# SESSION STATE INITIALIZATION
 # ============================================================
 
-if "generated_draft" not in st.session_state:
-    st.session_state.generated_draft = ""
+DEFAULT_STATE = {
+    "generated_draft": "",
+    "normal_information": "",
+    "ed_selected_indexes": [],
+    "ed_index_values": {},
+    "ed_documents": [],
+    "ed_other_document": "",
+    "ed_committee": {
+        "Convener of Inquiry": "",
+        "Member 1": "",
+        "Member 2": "",
+        "Departmental Representative": "",
+    },
+}
 
-if "normal_information" not in st.session_state:
-    st.session_state.normal_information = ""
 
-if "inquiry_indexes" not in st.session_state:
-    st.session_state.inquiry_indexes = [
-        {
-            "title": "Index 1",
-            "text": "",
-        }
-    ]
+for key, value in DEFAULT_STATE.items():
+
+    if key not in st.session_state:
+
+        # Copy mutable objects so they are not shared.
+        if isinstance(value, list):
+            st.session_state[key] = list(value)
+
+        elif isinstance(value, dict):
+            st.session_state[key] = dict(value)
+
+        else:
+            st.session_state[key] = value
 
 
 # ============================================================
-# DATABASE
+# DATABASE FUNCTIONS
 # ============================================================
 
 def init_db():
@@ -154,14 +199,12 @@ def init_db():
 
             if column not in existing_columns:
 
-                sql = (
+                cursor.execute(
                     "ALTER TABLE drafts ADD COLUMN "
                     + column
                     + " "
                     + data_type
                 )
-
-                cursor.execute(sql)
 
     conn.commit()
     conn.close()
@@ -255,6 +298,7 @@ init_db()
 def get_secret(name):
 
     try:
+
         return st.secrets.get(
             name,
             "",
@@ -268,6 +312,7 @@ def get_secret(name):
 def get_api_key(provider):
 
     if provider == "Groq":
+
         return get_secret(
             "GROQ_API_KEY"
         )
@@ -307,9 +352,7 @@ def transcribe_audio(
             api_key=api_key
         )
 
-        audio_bytes = (
-            audio_file.getvalue()
-        )
+        audio_bytes = audio_file.getvalue()
 
         if not audio_bytes:
 
@@ -371,6 +414,123 @@ def transcribe_audio(
 
 
 # ============================================================
+# VOICE CALLBACK HELPERS
+#
+# IMPORTANT:
+# These callbacks run before the next page render.
+# Therefore it is safe to update the text widget's
+# session-state value here.
+# ============================================================
+
+def append_voice_to_widget(
+    audio_key,
+    text_widget_key,
+    state_storage_key,
+):
+
+    audio = st.session_state.get(
+        audio_key
+    )
+
+    if audio is None:
+
+        return
+
+    try:
+
+        groq_key = get_secret(
+            "GROQ_API_KEY"
+        )
+
+        if not groq_key:
+
+            st.session_state[
+                "voice_error"
+            ] = (
+                "GROQ_API_KEY is not configured "
+                "in Streamlit Secrets."
+            )
+
+            return
+
+        transcript = transcribe_audio(
+            groq_key,
+            audio,
+        )
+
+        existing = st.session_state.get(
+            text_widget_key,
+            "",
+        )
+
+        if existing.strip():
+
+            combined = (
+                existing.rstrip()
+                + "\n"
+                + transcript
+            )
+
+        else:
+
+            combined = transcript
+
+        # This is executed by the callback
+        # before the widget is instantiated
+        # on the next Streamlit run.
+        st.session_state[
+            text_widget_key
+        ] = combined
+
+        # Keep application state synchronized.
+        st.session_state[
+            state_storage_key
+        ] = combined
+
+        st.session_state[
+            "voice_success"
+        ] = (
+            "Voice information added "
+            "to the text box."
+        )
+
+    except Exception as e:
+
+        st.session_state[
+            "voice_error"
+        ] = str(e)
+
+
+def add_normal_voice():
+
+    append_voice_to_widget(
+        audio_key="normal_voice_recorder",
+        text_widget_key="normal_information_editor",
+        state_storage_key="normal_information",
+    )
+
+
+def add_inquiry_voice(
+    index_name
+):
+
+    append_voice_to_widget(
+        audio_key=(
+            "ed_voice_"
+            + index_name
+        ),
+        text_widget_key=(
+            "ed_text_"
+            + index_name
+        ),
+        state_storage_key=(
+            "ed_state_"
+            + index_name
+        ),
+    )
+
+
+# ============================================================
 # AI PROMPT
 # ============================================================
 
@@ -409,45 +569,82 @@ def build_prompt(
 
     if document_type == "Inquiry":
 
-        inquiry_instruction = f"""
-This is an official {inquiry_type}.
+        if inquiry_type == "E&D Inquiry":
 
-The information is organized into multiple
-inquiry indexes.
+            inquiry_instruction = """
+This is an official E&D (Efficiency &
+Discipline / departmental disciplinary)
+inquiry.
 
-Every supplied index is important.
+The user has supplied information through
+specific inquiry indexes.
 
-Preserve the sequence and identity of the indexes.
+Treat the indexes as structured components
+of the inquiry report.
 
-Do not unnecessarily merge indexes.
+The normal E&D structure may include:
 
-Use professional official inquiry language.
+1. Inquiry Reference No.
+2. Subject
+3. Brief of the Inquiry
+4. Articles of Charge / Allegations
+5. Statement of the Accused
+6. Questions / Answers with the Accused
+7. Statements of Witnesses / Officials
+8. Documentary Evidence / Record Examined
+9. Defence / Written Explanation
+10. Findings
+11. Findings on Each Charge
+12. Discussion / Analysis
+13. Conclusion
+14. Recommendations
+15. Documents Recorded
+16. Inquiry Committee
 
-For FFI Inquiry:
-Use a fact-finding inquiry approach.
+Preserve the supplied index identity.
 
-For E&D Inquiry:
-Use a departmental disciplinary inquiry approach.
+Do not unnecessarily merge separate indexes.
 
-Clearly distinguish between allegations,
-statements, facts, evidence, observations,
-analysis, findings, conclusions and recommendations
-when the supplied information supports such
-distinctions.
+Use formal departmental inquiry language.
 
-Do not invent facts, evidence, statements,
-dates, findings or conclusions.
+Findings must be based only on supplied
+facts, statements and evidence.
 
-If information is missing, use a suitable
-placeholder or omit the unsupported fact.
+Do not invent facts, evidence, witnesses,
+dates, names, charges, admissions or findings.
+
+Where information is insufficient, do not
+guess.
+
+The final document should read as a coherent
+professional E&D inquiry report while
+preserving the substance of the supplied
+information.
+
+The Documents Recorded section should present
+the selected documents clearly.
+
+The Inquiry Committee section should preserve
+the Convener, Member 1, Member 2 and
+Departmental Representative details.
+"""
+
+        else:
+
+            inquiry_instruction = """
+FFI Inquiry functionality is currently under
+construction.
+
+Do not fabricate an FFI inquiry format.
 """
 
     prompt = f"""
 You are an expert professional writer,
 official correspondence specialist and
-inquiry-document drafting assistant.
+departmental inquiry-document drafting
+assistant.
 
-Create a polished professional {document_type}.
+Create a polished professional document.
 
 DOCUMENT TYPE:
 {document_type}
@@ -496,19 +693,18 @@ statements, allegations or findings.
 
 7. Make the document ready for practical use.
 
-8. Keep useful placeholders such as [Date],
-[Reference], [Office Name] or [Designation]
-where appropriate.
+8. Keep useful placeholders where appropriate.
 
-9. For Email, use appropriate email structure.
+9. For Email, use an appropriate email structure.
 
-10. For Letter, use appropriate official
+10. For Letter, use an appropriate official
 letter structure.
 
-11. For Inquiry, preserve all supplied indexes.
+11. For E&D Inquiry, preserve the supplied
+inquiry indexes and their meaning.
 
-12. For Inquiry, create appropriate headings
-and subheadings where useful.
+12. For E&D Inquiry, use appropriate headings
+and subheadings.
 
 13. Do not unnecessarily remove information
 provided by the user.
@@ -524,6 +720,12 @@ the document.
 
 18. If the user's information is incomplete,
 do not guess.
+
+19. Do not turn missing information into
+fictional information.
+
+20. Maintain a formal, objective and
+professionally neutral inquiry style.
 """
 
     return prompt.strip()
@@ -728,6 +930,7 @@ def wrap_pdf_line(
 ):
 
     if not text:
+
         return [""]
 
     words = text.split(" ")
@@ -838,25 +1041,12 @@ def export_docx(text):
 
     section = document.sections[0]
 
-    section.top_margin = Inches(
-        0.75
-    )
+    section.top_margin = Inches(0.75)
+    section.bottom_margin = Inches(0.75)
+    section.left_margin = Inches(0.8)
+    section.right_margin = Inches(0.8)
 
-    section.bottom_margin = Inches(
-        0.75
-    )
-
-    section.left_margin = Inches(
-        0.8
-    )
-
-    section.right_margin = Inches(
-        0.8
-    )
-
-    for paragraph in text.split(
-        "\n"
-    ):
+    for paragraph in text.split("\n"):
 
         document.add_paragraph(
             paragraph
@@ -920,9 +1110,7 @@ def export_png(text):
 
     lines = []
 
-    for paragraph in text.split(
-        "\n"
-    ):
+    for paragraph in text.split("\n"):
 
         if paragraph == "":
 
@@ -930,9 +1118,7 @@ def export_png(text):
 
             continue
 
-        words = paragraph.split(
-            " "
-        )
+        words = paragraph.split(" ")
 
         current = ""
 
@@ -1029,6 +1215,53 @@ def export_png(text):
 
 
 # ============================================================
+# E&D CALLBACKS
+# ============================================================
+
+def select_ed_index():
+
+    selected = st.session_state.get(
+        "ed_index_selector",
+        "",
+    )
+
+    if (
+        selected
+        and selected != "-- Select an index --"
+    ):
+
+        if selected not in st.session_state.ed_selected_indexes:
+
+            st.session_state.ed_selected_indexes.append(
+                selected
+            )
+
+
+def remove_ed_index(index_name):
+
+    if index_name in st.session_state.ed_selected_indexes:
+
+        st.session_state.ed_selected_indexes.remove(
+            index_name
+        )
+
+
+def reset_inquiry():
+
+    st.session_state.ed_selected_indexes = []
+    st.session_state.ed_index_values = {}
+    st.session_state.ed_documents = []
+    st.session_state.ed_other_document = ""
+
+    st.session_state.ed_committee = {
+        "Convener of Inquiry": "",
+        "Member 1": "",
+        "Member 2": "",
+        "Departmental Representative": "",
+    }
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -1111,15 +1344,15 @@ with st.sidebar:
         for row in history[:10]:
 
             draft_id = row[0]
-            document_type = row[1]
-            inquiry_type = row[2]
-            subject = row[6]
+            document_type_history = row[1]
+            inquiry_type_history = row[2]
+            subject_history = row[6]
             created_at = row[9]
 
             title = (
-                subject
-                if subject
-                else document_type
+                subject_history
+                if subject_history
+                else document_type_history
             )
 
             with st.expander(
@@ -1128,21 +1361,27 @@ with st.sidebar:
 
                 st.write(
                     "**Type:** "
-                    + str(document_type)
+                    + str(
+                        document_type_history
+                    )
                 )
 
-                if inquiry_type:
+                if inquiry_type_history:
 
                     st.write(
                         "**Inquiry:** "
-                        + str(inquiry_type)
+                        + str(
+                            inquiry_type_history
+                        )
                     )
 
-                if subject:
+                if subject_history:
 
                     st.write(
                         "**Subject:** "
-                        + str(subject)
+                        + str(
+                            subject_history
+                        )
                     )
 
                 if st.button(
@@ -1167,9 +1406,9 @@ st.title(
 )
 
 st.write(
-    "Create professional emails, letters, "
-    "inquiries and custom documents using "
-    "text or multilingual voice input."
+    "Create professional emails, letters and "
+    "inquiries using natural-language text or "
+    "multilingual voice input."
 )
 
 st.divider()
@@ -1204,20 +1443,33 @@ if document_type == "Inquiry":
 
     if inquiry_type == "FFI Inquiry":
 
+        st.warning(
+            "🚧 FFI Inquiry Module — Under Construction"
+        )
+
         st.info(
-            "FFI Inquiry — Fact Finding Inquiry"
+            "The FFI inquiry format and indexes "
+            "are currently under process. "
+            "Please use E&D Inquiry for the "
+            "currently available inquiry workflow."
         )
 
     else:
 
-        st.info(
-            "E&D Inquiry — Departmental "
-            "disciplinary inquiry"
+        st.success(
+            "✅ E&D Inquiry Module"
+        )
+
+        st.caption(
+            "Select the required inquiry indexes "
+            "from the dropdown below. Each selected "
+            "index accepts natural-language typing "
+            "and voice input."
         )
 
 
 # ============================================================
-# TONE
+# GENERAL SETTINGS
 # ============================================================
 
 tone = st.selectbox(
@@ -1227,36 +1479,45 @@ tone = st.selectbox(
 
 
 # ============================================================
-# RECIPIENT / SENDER
+# RECIPIENT / SENDER / SUBJECT
 # ============================================================
 
-col1, col2 = st.columns(2)
+# For E&D inquiry, Subject is an index and
+# therefore the normal Subject field is not shown.
 
-with col1:
+if (
+    document_type == "Inquiry"
+    and inquiry_type == "E&D Inquiry"
+):
 
-    recipient = st.text_input(
-        "👤 Recipient",
-        placeholder=(
-            "e.g. Manager / Director / Officer"
-        ),
+    recipient = ""
+    sender = profile_name
+    subject = ""
+
+else:
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        recipient = st.text_input(
+            "👤 Recipient",
+            placeholder=(
+                "e.g. Manager / Director / Officer"
+            ),
+        )
+
+    with col2:
+
+        sender = st.text_input(
+            "✍️ Sender",
+            value=profile_name,
+        )
+
+    subject = st.text_input(
+        "📌 Subject",
+        placeholder="Enter subject",
     )
-
-with col2:
-
-    sender = st.text_input(
-        "✍️ Sender",
-        value=profile_name,
-    )
-
-
-# ============================================================
-# SUBJECT
-# ============================================================
-
-subject = st.text_input(
-    "📌 Subject",
-    placeholder="Enter subject",
-)
 
 
 # ============================================================
@@ -1270,7 +1531,29 @@ output_language = st.selectbox(
 
 
 # ============================================================
-# NORMAL INPUT
+# STATUS MESSAGES
+# ============================================================
+
+if "voice_error" in st.session_state:
+
+    st.error(
+        st.session_state.voice_error
+    )
+
+    del st.session_state.voice_error
+
+
+if "voice_success" in st.session_state:
+
+    st.success(
+        st.session_state.voice_success
+    )
+
+    del st.session_state.voice_success
+
+
+# ============================================================
+# NORMAL INFORMATION BOX
 # ============================================================
 
 def normal_information_box():
@@ -1280,427 +1563,445 @@ def normal_information_box():
     )
 
     st.caption(
-        "You can type information and/or add "
-        "voice information. Voice transcription "
-        "will be added to the same text box."
+        "Type naturally or use the microphone. "
+        "Voice transcription is inserted directly "
+        "into the same text box."
     )
 
-    text_key = (
-        "normal_information"
+    text_widget_key = (
+        "normal_information_editor"
     )
 
-    editor_value = st.session_state.get(
-        text_key,
-        "",
-    )
+    if text_widget_key not in st.session_state:
+
+        st.session_state[
+            text_widget_key
+        ] = st.session_state.get(
+            "normal_information",
+            "",
+        )
 
     st.text_area(
         "Type or edit your information",
-        value=editor_value,
         height=250,
-        key="normal_information_editor",
+        key=text_widget_key,
         placeholder=(
             "Type your request here..."
         ),
     )
 
-    current_text = st.session_state.get(
-        "normal_information_editor",
-        "",
+    # Synchronize application state.
+    # This does NOT modify the widget key.
+    st.session_state.normal_information = (
+        st.session_state.get(
+            text_widget_key,
+            "",
+        )
     )
-
-    # Keep application state separate from
-    # the widget's own state.
-    st.session_state[
-        text_key
-    ] = current_text
 
     st.markdown(
-        "#### 🎙️ Add information by voice"
+        "#### 🎙️ Voice Input"
     )
 
-    audio = st.audio_input(
+    st.audio_input(
         "Record your voice",
         sample_rate=16000,
         key="normal_voice_recorder",
     )
 
-    if audio is not None:
-
-        if st.button(
-            "🎙️ Add Voice to Text Box",
-            key="normal_transcribe_button",
-            use_container_width=True,
-        ):
-
-            groq_key = get_secret(
-                "GROQ_API_KEY"
-            )
-
-            if not groq_key:
-
-                st.error(
-                    "GROQ_API_KEY is not configured "
-                    "in Streamlit Secrets."
-                )
-
-            else:
-
-                with st.spinner(
-                    "🎙️ Transcribing voice..."
-                ):
-
-                    try:
-
-                        transcript = (
-                            transcribe_audio(
-                                groq_key,
-                                audio,
-                            )
-                        )
-
-                        existing = (
-                            st.session_state.get(
-                                text_key,
-                                "",
-                            )
-                        )
-
-                        if existing.strip():
-
-                            combined = (
-                                existing
-                                + "\n"
-                                + transcript
-                            )
-
-                        else:
-
-                            combined = (
-                                transcript
-                            )
-
-                        # Store result in the
-                        # application state.
-                        st.session_state[
-                            text_key
-                        ] = combined
-
-                        st.session_state[
-                            "normal_information_editor"
-                        ] = combined
-
-                        st.success(
-                            "Voice added to the "
-                            "information."
-                        )
-
-                        st.rerun()
-
-                    except Exception as e:
-
-                        st.error(
-                            str(e)
-                        )
+    st.button(
+        "🎙️ Add Voice to Text Box",
+        key="normal_transcribe_button",
+        use_container_width=True,
+        on_click=add_normal_voice,
+    )
 
     return st.session_state.get(
-        text_key,
+        text_widget_key,
         "",
     )
 
 
 # ============================================================
-# INQUIRY INPUT
+# E&D DOCUMENTS RECORDED
+# ============================================================
+
+def render_documents_recorded():
+
+    st.markdown(
+        "### 📂 Documents Recorded"
+    )
+
+    st.caption(
+        "Select the documents that were available "
+        "or examined during the inquiry."
+    )
+
+    documents = [
+        "CNICF",
+        "BC",
+        "Marriage Certificate",
+        "CNICs",
+        "Domicile",
+        "Affidavit",
+        "Complaint / Application",
+        "Written Explanation",
+        "Official Record",
+        "Other",
+    ]
+
+    selected_documents = []
+
+    columns = st.columns(2)
+
+    for number, document in enumerate(
+        documents
+    ):
+
+        with columns[number % 2]:
+
+            checked = st.checkbox(
+                document,
+                key=(
+                    "ed_document_"
+                    + str(number)
+                ),
+            )
+
+            if checked:
+
+                selected_documents.append(
+                    document
+                )
+
+    if "Other" in selected_documents:
+
+        st.text_input(
+            "Specify other document",
+            key="ed_other_document",
+            placeholder="Enter document name",
+        )
+
+        if st.session_state.ed_other_document.strip():
+
+            selected_documents.append(
+                "Other: "
+                + st.session_state.ed_other_document.strip()
+            )
+
+    st.session_state.ed_documents = (
+        selected_documents
+    )
+
+    return selected_documents
+
+
+# ============================================================
+# E&D INQUIRY COMMITTEE
+# ============================================================
+
+def render_inquiry_committee():
+
+    st.markdown(
+        "### 👥 Inquiry Committee"
+    )
+
+    st.caption(
+        "Enter ERP#, Name and Designation for "
+        "each committee member."
+    )
+
+    committee_fields = [
+        "Convener of Inquiry",
+        "Member 1",
+        "Member 2",
+        "Departmental Representative",
+    ]
+
+    for field in committee_fields:
+
+        st.markdown(
+            f"**{field}**"
+        )
+
+        value = st.text_input(
+            f"{field} details",
+            key=(
+                "ed_committee_"
+                + field
+                .lower()
+                .replace(" ", "_")
+            ),
+            placeholder=(
+                "ERP# | Name | Designation"
+            ),
+        )
+
+        st.session_state.ed_committee[
+            field
+        ] = value
+
+
+# ============================================================
+# E&D INQUIRY INPUT
 # ============================================================
 
 def inquiry_information_boxes():
 
     st.markdown(
-        "### 📑 Inquiry Indexes"
+        "### 📑 E&D Inquiry Indexes"
     )
 
     st.caption(
-        "Add as many indexes as required. "
-        "Each index accepts both typed and "
-        "voice information."
+        "Select an index from the dropdown. "
+        "Once selected, it will no longer appear "
+        "in the dropdown."
     )
 
-    remove_index = None
+    selected_indexes = (
+        st.session_state.ed_selected_indexes
+    )
 
-    for index_number in range(
-        len(
-            st.session_state.inquiry_indexes
-        )
+    available_indexes = [
+        index
+        for index in ED_INDEXES
+        if index not in selected_indexes
+    ]
+
+    selector_options = [
+        "-- Select an index --"
+    ] + available_indexes
+
+    st.selectbox(
+        "➕ Select Inquiry Index",
+        selector_options,
+        key="ed_index_selector",
+        on_change=select_ed_index,
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RENDER SELECTED INDEXES
+    # --------------------------------------------------------
+
+    for position, index_name in enumerate(
+        list(selected_indexes)
     ):
 
-        index_data = (
-            st.session_state.inquiry_indexes[
-                index_number
-            ]
-        )
-
-        title_state_key = (
-            "inquiry_title_state_"
-            + str(index_number)
-        )
-
-        text_state_key = (
-            "inquiry_text_state_"
-            + str(index_number)
-        )
-
-        title_widget_key = (
-            "inquiry_title_widget_"
-            + str(index_number)
+        safe_name = (
+            index_name
+            .lower()
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("#", "no")
+            .replace("&", "and")
+            .replace("(", "")
+            .replace(")", "")
+            .replace("-", "_")
         )
 
         text_widget_key = (
-            "inquiry_text_widget_"
-            + str(index_number)
+            "ed_text_"
+            + index_name
         )
 
-        if title_state_key not in st.session_state:
+        state_storage_key = (
+            "ed_state_"
+            + index_name
+        )
+
+        voice_key = (
+            "ed_voice_"
+            + index_name
+        )
+
+        transcribe_key = (
+            "ed_transcribe_"
+            + safe_name
+        )
+
+        if state_storage_key not in st.session_state:
 
             st.session_state[
-                title_state_key
-            ] = index_data.get(
-                "title",
-                "Index "
-                + str(index_number + 1),
+                state_storage_key
+            ] = st.session_state.ed_index_values.get(
+                index_name,
+                "",
             )
 
-        if text_state_key not in st.session_state:
+        if text_widget_key not in st.session_state:
 
             st.session_state[
-                text_state_key
-            ] = index_data.get(
-                "text",
+                text_widget_key
+            ] = st.session_state.get(
+                state_storage_key,
                 "",
             )
 
         st.markdown(
-            "#### 📌 Index "
-            + str(index_number + 1)
+            "#### 📌 "
+            + index_name
         )
 
-        title_value = st.text_input(
-            "Index title",
-            value=st.session_state[
-                title_state_key
-            ],
-            key=title_widget_key,
-            placeholder=(
-                "e.g. Allegation, Statement "
-                "of accused, Witness statement, "
-                "Documentary evidence"
-            ),
-        )
+        # ----------------------------------------------------
+        # SPECIAL INDEX: DOCUMENTS RECORDED
+        # ----------------------------------------------------
 
-        text_value = st.text_area(
-            "Type or edit information",
-            value=st.session_state[
-                text_state_key
-            ],
-            height=180,
-            key=text_widget_key,
-            placeholder=(
-                "Type information for this index..."
-            ),
-        )
+        if index_name == "Documents Recorded":
 
-        # IMPORTANT:
-        # Do not modify text_widget_key after
-        # the widget has been instantiated.
-        # Instead, copy the widget value into
-        # our separate application state.
-        st.session_state[
-            title_state_key
-        ] = title_value
+            render_documents_recorded()
 
-        st.session_state[
-            text_state_key
-        ] = text_value
+        # ----------------------------------------------------
+        # SPECIAL INDEX: INQUIRY COMMITTEE
+        # ----------------------------------------------------
 
-        st.session_state.inquiry_indexes[
-            index_number
-        ]["title"] = title_value
+        elif index_name == "Inquiry Committee":
 
-        st.session_state.inquiry_indexes[
-            index_number
-        ]["text"] = text_value
+            render_inquiry_committee()
 
-        voice_key = (
-            "inquiry_voice_"
-            + str(index_number)
-        )
+        # ----------------------------------------------------
+        # NORMAL TEXT / VOICE INDEX
+        # ----------------------------------------------------
 
-        transcribe_key = (
-            "inquiry_transcribe_"
-            + str(index_number)
-        )
+        else:
 
-        audio = st.audio_input(
-            "🎙️ Record voice for this index",
-            sample_rate=16000,
-            key=voice_key,
-        )
+            st.text_area(
+                "Type or edit information",
+                height=180,
+                key=text_widget_key,
+                placeholder=(
+                    "Type information naturally "
+                    "for this index..."
+                ),
+            )
 
-        if audio is not None:
+            # IMPORTANT:
+            # We only copy FROM the widget into
+            # separate application state.
+            # We NEVER write back to the widget
+            # key during this run.
+            current_value = st.session_state.get(
+                text_widget_key,
+                "",
+            )
 
-            if st.button(
+            st.session_state[
+                state_storage_key
+            ] = current_value
+
+            st.session_state.ed_index_values[
+                index_name
+            ] = current_value
+
+            st.audio_input(
+                "🎙️ Record voice for this index",
+                sample_rate=16000,
+                key=voice_key,
+            )
+
+            st.button(
                 "🎙️ Add Voice to This Index",
                 key=transcribe_key,
                 use_container_width=True,
-            ):
+                on_click=add_inquiry_voice,
+                args=(index_name,),
+            )
 
-                groq_key = get_secret(
-                    "GROQ_API_KEY"
-                )
-
-                if not groq_key:
-
-                    st.error(
-                        "GROQ_API_KEY is not configured "
-                        "in Streamlit Secrets."
-                    )
-
-                else:
-
-                    with st.spinner(
-                        "🎙️ Transcribing voice..."
-                    ):
-
-                        try:
-
-                            transcript = (
-                                transcribe_audio(
-                                    groq_key,
-                                    audio,
-                                )
-                            )
-
-                            existing = (
-                                st.session_state.get(
-                                    text_state_key,
-                                    "",
-                                )
-                            )
-
-                            if existing.strip():
-
-                                combined = (
-                                    existing
-                                    + "\n"
-                                    + transcript
-                                )
-
-                            else:
-
-                                combined = (
-                                    transcript
-                                )
-
-                            # Update application state,
-                            # NOT the instantiated widget.
-                            st.session_state[
-                                text_state_key
-                            ] = combined
-
-                            st.session_state.inquiry_indexes[
-                                index_number
-                            ]["text"] = combined
-
-                            st.success(
-                                "Voice added to Index "
-                                + str(index_number + 1)
-                                + "."
-                            )
-
-                            st.rerun()
-
-                        except Exception as e:
-
-                            st.error(
-                                str(e)
-                            )
-
-        if len(
-            st.session_state.inquiry_indexes
-        ) > 1:
-
-            if st.button(
-                "🗑️ Remove This Index",
-                key=(
-                    "remove_index_"
-                    + str(index_number)
-                ),
-            ):
-
-                remove_index = (
-                    index_number
-                )
+        st.button(
+            "🗑️ Remove this index",
+            key=(
+                "remove_ed_"
+                + safe_name
+            ),
+            on_click=remove_ed_index,
+            args=(index_name,),
+        )
 
         st.divider()
 
-    if remove_index is not None:
+    if selected_indexes:
 
-        st.session_state.inquiry_indexes.pop(
-            remove_index
+        st.caption(
+            "Selected indexes: "
+            + str(len(selected_indexes))
+            + " / "
+            + str(len(ED_INDEXES))
         )
 
-        st.rerun()
+        if st.button(
+            "↻ Reset E&D Inquiry Indexes",
+            use_container_width=True,
+        ):
 
-    if st.button(
-        "➕ Add Another Index",
-        use_container_width=True,
-    ):
+            reset_inquiry()
 
-        new_number = (
-            len(
-                st.session_state.inquiry_indexes
-            )
-            + 1
-        )
+            st.rerun()
 
-        st.session_state.inquiry_indexes.append(
-            {
-                "title": (
-                    "Index "
-                    + str(new_number)
-                ),
-                "text": "",
-            }
-        )
-
-        st.rerun()
+    # --------------------------------------------------------
+    # BUILD INFORMATION FOR AI
+    # --------------------------------------------------------
 
     information_parts = []
 
-    for index_number, index_data in enumerate(
-        st.session_state.inquiry_indexes
-    ):
+    for index_name in st.session_state.ed_selected_indexes:
 
-        title = index_data.get(
-            "title",
-            "Index "
-            + str(index_number + 1),
-        )
+        if index_name == "Documents Recorded":
 
-        text = index_data.get(
-            "text",
-            "",
-        )
-
-        if text.strip():
-
-            information_parts.append(
-                "INDEX "
-                + str(index_number + 1)
-                + ": "
-                + title
-                + "\n"
-                + text
+            documents = (
+                st.session_state.ed_documents
             )
+
+            if documents:
+
+                information_parts.append(
+                    "INDEX: Documents Recorded\n"
+                    + "\n".join(
+                        "- " + item
+                        for item in documents
+                    )
+                )
+
+        elif index_name == "Inquiry Committee":
+
+            committee_parts = []
+
+            for role, details in (
+                st.session_state.ed_committee.items()
+            ):
+
+                if details.strip():
+
+                    committee_parts.append(
+                        role
+                        + ": "
+                        + details
+                    )
+
+            if committee_parts:
+
+                information_parts.append(
+                    "INDEX: Inquiry Committee\n"
+                    + "\n".join(
+                        committee_parts
+                    )
+                )
+
+        else:
+
+            text = st.session_state.ed_index_values.get(
+                index_name,
+                "",
+            )
+
+            if text.strip():
+
+                information_parts.append(
+                    "INDEX: "
+                    + index_name
+                    + "\n"
+                    + text
+                )
 
     return "\n\n".join(
         information_parts
@@ -1711,10 +2012,25 @@ def inquiry_information_boxes():
 # DISPLAY INPUT AREA
 # ============================================================
 
-if document_type == "Inquiry":
+information = ""
+
+if (
+    document_type == "Inquiry"
+    and inquiry_type == "E&D Inquiry"
+):
 
     information = (
         inquiry_information_boxes()
+    )
+
+elif (
+    document_type == "Inquiry"
+    and inquiry_type == "FFI Inquiry"
+):
+
+    st.info(
+        "FFI input fields will be added when "
+        "the FFI inquiry format is finalized."
     )
 
 else:
@@ -1730,83 +2046,120 @@ else:
 
 st.divider()
 
-if st.button(
-    "✨ Generate Professional Document",
-    type="primary",
-    use_container_width=True,
+generate_allowed = True
+
+if (
+    document_type == "Inquiry"
+    and inquiry_type == "FFI Inquiry"
 ):
 
-    if not information.strip():
+    generate_allowed = False
 
-        st.warning(
-            "Please provide information "
-            "by typing or speaking."
-        )
 
-    elif not api_key:
+if generate_allowed:
 
-        st.error(
-            "Please configure the selected "
-            "AI API key in Streamlit Secrets."
-        )
+    if st.button(
+        "✨ Generate Professional Document",
+        type="primary",
+        use_container_width=True,
+    ):
 
-    else:
+        if not information.strip():
 
-        prompt = build_prompt(
-            document_type=document_type,
-            inquiry_type=inquiry_type,
-            tone=tone,
-            recipient=recipient,
-            sender=sender,
-            subject=subject,
-            information=information,
-            output_language=output_language,
-        )
+            st.warning(
+                "Please provide information "
+                "by typing or speaking."
+            )
 
-        with st.spinner(
-            "✨ Preparing your professional document..."
-        ):
+        elif not api_key:
 
-            try:
+            st.error(
+                "Please configure the selected "
+                "AI API key in Streamlit Secrets."
+            )
 
-                if provider == "Groq":
+        else:
 
-                    draft = call_groq(
-                        api_key,
-                        prompt,
+            # For E&D the subject is obtained
+            # from the inquiry index.
+            inquiry_subject = ""
+
+            if (
+                document_type == "Inquiry"
+                and inquiry_type == "E&D Inquiry"
+            ):
+
+                inquiry_subject = (
+                    st.session_state.ed_index_values.get(
+                        "Subject",
+                        "",
+                    )
+                )
+
+            prompt = build_prompt(
+                document_type=document_type,
+                inquiry_type=inquiry_type,
+                tone=tone,
+                recipient=recipient,
+                sender=sender,
+                subject=(
+                    inquiry_subject
+                    if inquiry_subject
+                    else subject
+                ),
+                information=information,
+                output_language=output_language,
+            )
+
+            with st.spinner(
+                "✨ Preparing your professional document..."
+            ):
+
+                try:
+
+                    if provider == "Groq":
+
+                        draft = call_groq(
+                            api_key,
+                            prompt,
+                        )
+
+                    else:
+
+                        draft = call_gemini(
+                            api_key,
+                            prompt,
+                        )
+
+                    st.session_state.generated_draft = (
+                        draft
                     )
 
-                else:
-
-                    draft = call_gemini(
-                        api_key,
-                        prompt,
+                    save_draft(
+                        document_type,
+                        inquiry_type,
+                        tone,
+                        recipient,
+                        sender,
+                        (
+                            inquiry_subject
+                            if inquiry_subject
+                            else subject
+                        ),
+                        information,
+                        draft,
                     )
 
-                st.session_state.generated_draft = (
-                    draft
-                )
+                    st.success(
+                        "✅ Document generated and "
+                        "saved successfully!"
+                    )
 
-                save_draft(
-                    document_type,
-                    inquiry_type,
-                    tone,
-                    recipient,
-                    sender,
-                    subject,
-                    information,
-                    draft,
-                )
+                except Exception as e:
 
-                st.success(
-                    "✅ Document generated and saved successfully!"
-                )
-
-            except Exception as e:
-
-                st.error(
-                    str(e)
-                )
+                    st.error(
+                        str(e)
+                    )
 
 
 # ============================================================
@@ -1828,6 +2181,8 @@ if st.session_state.generated_draft:
         key="generated_document_editor",
     )
 
+    # As with the other widget, only copy
+    # the widget value after rendering.
     st.session_state.generated_draft = (
         edited_draft
     )
